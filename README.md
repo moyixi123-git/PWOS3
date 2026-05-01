@@ -1,5 +1,4 @@
 # PWOS3
-请查看README文件。Please check the README file.
 # ⚡ PWOS3 - Python 一体化学习平台
 
 > 由于本项目出自于中国，暂时没有英语版本，需要的用户请自行用其他软件翻译。
