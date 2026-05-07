@@ -385,12 +385,13 @@ class ScriptEngine:
 
     def call_func(self, name, args=None):
         if name in self.functions:
-            self.execute_block(self.functions[name])
+            return self.execute_block(self.functions[name])
         else:
             safe_print(f"函数 {name} 未定义")
 
     def get_menu_items(self):
         return [(f"脚本 {bid}", bid) for bid, _ in self.menu_items]
+        return None
 
     def reload(self):
         self._load_all_scripts()
@@ -775,16 +776,12 @@ except Exception as e:
 
     @staticmethod
     def check_version(lib_name: str, min_version: str) -> bool:
-        """检查库版本"""
         try:
-            if lib_name == "llama-cpp-python":
-                import llama_cpp
-                version = getattr(llama_cpp, "__version__", "0.2.78")
-                return version >= min_version
-            else:
-                import pkg_resources
-                version = pkg_resources.get_distribution(lib_name).version
-                return version >= min_version
+            import pkg_resources
+            # 处理 llama-cpp-python 的特殊情况
+            pkg_name = "llama_cpp" if lib_name == "llama-cpp-python" else lib_name
+            version = pkg_resources.get_distribution(pkg_name).version
+            return version >= min_version
         except:
             return False
 
@@ -1356,6 +1353,7 @@ class UITools:
     def show_main_menu() -> str:
         """显示主菜单"""
         global developer_mode, system_name, _script_cache
+        _script_cache = None
 
         safe_print("\n" + "=" * 60)
         safe_print(f"           {system_name}")
@@ -1435,7 +1433,7 @@ class UITools:
                         if selection == str(i):
                             script_engine = ScriptEngine()
                             script_engine.run_main(bid)
-                            return UITools.show_main_menu()
+                            return ""
                     # 处理退出系统
                     if selection == str(exit_num):
                         return "exit"
@@ -2521,7 +2519,9 @@ class UserManagement:
                     return
             
                 # 备份后再删除
-                backup_dir = os.path.join(data_dir, "deleted_backups")
+                deleted_backup_dir = os.path.join(data_dir, "deleted_backups")
+                os.makedirs(deleted_backup_dir, exist_ok=True)
+                backup_file = os.path.join(deleted_backup_dir, f"{current_file_name}_{timestamp}.deleted.json")
                 os.makedirs(backup_dir, exist_ok=True)
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = os.path.join(backup_dir, f"{current_file_name}_{timestamp}.deleted.json")
@@ -3435,6 +3435,25 @@ class EnhancedNetworkFunctions:
 # ==================== 系统功能 ====================
 class SystemFunctions:
     @staticmethod
+    def view_update_packages() -> None:
+        """查看更新包"""
+        safe_print("\n===== 可用更新包 =====")
+        update_packages = UpdateManagement.check_update_packages()
+        
+        if not update_packages:
+            safe_print("没有找到任何更新包")
+            return
+        
+        for i, package_name in enumerate(update_packages, 1):
+            package_path = os.path.join(update_package_dir, package_name)
+            package_info = UpdateManagement.parse_update_package(package_path)
+            if package_info:
+                safe_print(f"{i}. {package_name}")
+                safe_print(f"   类型: {package_info['类型名称']}")
+                safe_print(f"   描述: {package_info['注释']}")
+                safe_print(f"   文件: {', '.join(package_info['文件列表']) if package_info['文件列表'] else '无'}")
+                
+    @staticmethod
     def show_system_info() -> None:
         """显示系统信息"""
         try:
@@ -3495,7 +3514,24 @@ class SystemFunctions:
         except Exception as e:
             safe_print(f"❌ 查看日志时发生错误: {str(e)}")
             SystemLog.log(f"查看日志失败: {str(e)}", "错误")
-
+    @staticmethod
+    def view_update_packages() -> None:
+        """查看更新包"""
+        safe_print("\n===== 可用更新包 =====")
+        update_packages = UpdateManagement.check_update_packages()
+        
+        if not update_packages:
+            safe_print("没有找到任何更新包")
+            return
+        
+        for i, package_name in enumerate(update_packages, 1):
+            package_path = os.path.join(update_package_dir, package_name)
+            package_info = UpdateManagement.parse_update_package(package_path)
+            if package_info:
+                safe_print(f"\n{i}. 📦 {package_name}")
+                safe_print(f"   类型: {package_info['类型名称']}")
+                safe_print(f"   描述: {package_info['注释']}")
+                safe_print(f"   文件: {', '.join(package_info['文件列表']) if package_info['文件列表'] else '无'}")
     @staticmethod
     def export_data() -> None:
         """导出数据"""
@@ -4363,10 +4399,10 @@ class UpdateManagement:
                 safe_print("ℹ️  无文件安全更新 - 可能是配置调整")
             
             SystemLog.security_log(f"安全更新: {package_info['包名']}", "系统", "成功")
-            return True, "安全更新完成"
+            return True, "✅ 安全更新完成"
         except Exception as e:
             SystemLog.security_log(f"安全更新: {package_info['包名']}", "系统", "失败")
-            return False, f"安全更新失败: {str(e)}"
+            return False, f"❌ 安全更新失败: {str(e)}"
 
     @staticmethod
     def security_patch_check() -> bool:
@@ -5800,12 +5836,13 @@ class ScriptEngine:
 
     def call_func(self, name, args=None):
         if name in self.functions:
-            self.execute_block(self.functions[name])
+            return self.execute_block(self.functions[name])
         else:
             safe_print(f"函数 {name} 未定义")
 
     def get_menu_items(self):
         return [(f"脚本 {bid}", bid) for bid, _ in self.menu_items]
+        return None
 
     def reload(self):
         self._load_all_scripts()
@@ -6189,12 +6226,11 @@ except Exception as e:
 
     @staticmethod
     def check_version(lib_name: str, min_version: str) -> bool:
-        """检查库版本"""
         try:
             import pkg_resources
-            if lib_name == "llama-cpp-python":
-                lib_name = "llama_cpp"
-            version = pkg_resources.get_distribution(lib_name).version
+            # 处理 llama-cpp-python 的特殊情况
+            pkg_name = "llama_cpp" if lib_name == "llama-cpp-python" else lib_name
+            version = pkg_resources.get_distribution(pkg_name).version
             return version >= min_version
         except:
             return False
@@ -6768,6 +6804,7 @@ class UITools:
     def show_main_menu() -> str:
         """显示主菜单"""
         global developer_mode, system_name, _script_cache
+        _script_cache = None
 
         safe_print("\n" + "=" * 60)
         safe_print(f"           {system_name}")
@@ -6847,7 +6884,7 @@ class UITools:
                         if selection == str(i):
                             script_engine = ScriptEngine()
                             script_engine.run_main(bid)
-                            return UITools.show_main_menu()
+                            return ""
                     # 处理退出系统
                     if selection == str(exit_num):
                         return "exit"
@@ -7934,7 +7971,9 @@ class UserManagement:
                     return
             
                 # 备份后再删除
-                backup_dir = os.path.join(data_dir, "deleted_backups")
+                deleted_backup_dir = os.path.join(data_dir, "deleted_backups")
+                os.makedirs(deleted_backup_dir, exist_ok=True)
+                backup_file = os.path.join(deleted_backup_dir, f"{current_file_name}_{timestamp}.deleted.json")
                 os.makedirs(backup_dir, exist_ok=True)
                 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 backup_file = os.path.join(backup_dir, f"{current_file_name}_{timestamp}.deleted.json")
@@ -8848,6 +8887,25 @@ class EnhancedNetworkFunctions:
 # ==================== 系统功能 ====================
 class SystemFunctions:
     @staticmethod
+    def view_update_packages() -> None:
+        """查看更新包"""
+        safe_print("\n===== 可用更新包 =====")
+        update_packages = UpdateManagement.check_update_packages()
+        
+        if not update_packages:
+            safe_print("没有找到任何更新包")
+            return
+        
+        for i, package_name in enumerate(update_packages, 1):
+            package_path = os.path.join(update_package_dir, package_name)
+            package_info = UpdateManagement.parse_update_package(package_path)
+            if package_info:
+                safe_print(f"\n{i}. 📦 {package_name}")
+                safe_print(f"   类型: {package_info['类型名称']}")
+                safe_print(f"   描述: {package_info['注释']}")
+                safe_print(f"   文件: {', '.join(package_info['文件列表']) if package_info['文件列表'] else '无'}")
+
+    @staticmethod
     def show_system_info() -> None:
         """显示系统信息"""
         try:
@@ -8908,7 +8966,24 @@ class SystemFunctions:
         except Exception as e:
             safe_print(f"❌ 查看日志时发生错误: {str(e)}")
             SystemLog.log(f"查看日志失败: {str(e)}", "错误")
-
+    @staticmethod
+    def view_update_packages() -> None:
+        """查看更新包"""
+        safe_print("\n===== 可用更新包 =====")
+        update_packages = UpdateManagement.check_update_packages()
+        
+        if not update_packages:
+            safe_print("没有找到任何更新包")
+            return
+        
+        for i, package_name in enumerate(update_packages, 1):
+            package_path = os.path.join(update_package_dir, package_name)
+            package_info = UpdateManagement.parse_update_package(package_path)
+            if package_info:
+                safe_print(f"\n{i}. 📦 {package_name}")
+                safe_print(f"   类型: {package_info['类型名称']}")
+                safe_print(f"   描述: {package_info['注释']}")
+                safe_print(f"   文件: {', '.join(package_info['文件列表']) if package_info['文件列表'] else '无'}")
     @staticmethod
     def export_data() -> None:
         """导出数据"""
@@ -9776,10 +9851,10 @@ class UpdateManagement:
                 safe_print("ℹ️  无文件安全更新 - 可能是配置调整")
             
             SystemLog.security_log(f"安全更新: {package_info['包名']}", "系统", "成功")
-            return True, "安全更新完成"
+            return True, "✅ 安全更新完成"
         except Exception as e:
             SystemLog.security_log(f"安全更新: {package_info['包名']}", "系统", "失败")
-            return False, f"安全更新失败: {str(e)}"
+            return False, f"❌ 安全更新失败: {str(e)}"
 
     @staticmethod
     def security_patch_check() -> bool:
@@ -14002,7 +14077,7 @@ def enhanced_main_program() -> None:
             EnhancedNetworkFunctions.show_menu()
         elif selection == "19":
             UserFileManagement.show_menu()  # 新增用户文件管理
-        elif selection == "20" and developer_mode:
+        elif selection == "dev" and developer_mode:
             while True:
                 developer_selection = DeveloperModeFunctions.show_developer_menu()
                 if developer_selection == "1":
@@ -17427,7 +17502,7 @@ def enhanced_main_program() -> None:
             EnhancedNetworkFunctions.show_menu()
         elif selection == "19":
             UserFileManagement.show_menu()  # 新增用户文件管理
-        elif selection == "20" and developer_mode:
+        elif selection == "dev" and developer_mode:
             while True:
                 developer_selection = DeveloperModeFunctions.show_developer_menu()
                 if developer_selection == "1":
