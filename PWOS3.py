@@ -15,6 +15,10 @@ import threading
 import ctypes
 from typing import Optional, Tuple, List, Dict, Any
 import secrets
+from pathlib import Path
+import base64
+import struct
+from typing import Optional
 
 # ==================== 初始化设置 ====================
 _script_cache = None  # 放在文件顶部，类外面
@@ -508,7 +512,7 @@ password_file = os.path.join(data_dir, "secure_passwords.json")
 version_file = os.path.join(data_dir, "version.json")
 update_package_dir = os.path.join(_BASE_DIR, "update_packages")
 firewall_file = os.path.join(data_dir, "firewall_rules.json")
-ai_config_file = os.path.join(data_dir, "ai_config.json")
+#ai_config_file = os.path.join(data_dir, "ai_config.json")
 network_rules_file = os.path.join(data_dir, "network_rules.json")
 
 system_name = "PWOS3"
@@ -1005,23 +1009,27 @@ class UserGroupManager:
     """用户分组管理器"""
     
     @staticmethod
-    def get_user_files_dir() -> str:
-        """获取用户文件目录"""
-        return os.path.join(data_dir, "user_files")
+    def get_user_files_dir() -> Path:
+        """获取用户文件目录（加密版）"""
+        data_dir = DataManagement._get_encrypted_data_dir()
+        return data_dir / 'user_files'
+
     
     @staticmethod
-    def get_groups_file() -> str:
-        """获取分组配置文件路径"""
-        return os.path.join(data_dir, "groups.json")
+    def get_groups_file() -> Path:
+        """获取分组配置文件路径（加密版）"""
+        data_dir = DataManagement._get_encrypted_data_dir()
+        return data_dir / 'groups.json'
     
     @staticmethod
     def load_groups_data() -> Dict[str, Any]:
-        """加载分组数据"""
+        """加载分组数据（从加密文件）"""
         try:
             groups_file = UserGroupManager.get_groups_file()
-            if os.path.exists(groups_file):
-                with open(groups_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            if groups_file.exists():
+                data = DataEncryption.read_json(groups_file)
+                if data:
+                    return data
             return {
                 "groups": {},
                 "ungrouped_files": [],
@@ -1038,35 +1046,34 @@ class UserGroupManager:
     
     @staticmethod
     def save_groups_data(data: Dict[str, Any]) -> bool:
-        """保存分组数据"""
+        """保存分组数据（加密存储）"""
         try:
             groups_file = UserGroupManager.get_groups_file()
-            os.makedirs(os.path.dirname(groups_file), exist_ok=True)
-            with open(groups_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return True
+            groups_file.parent.mkdir(parents=True, exist_ok=True)
+            return DataEncryption.write_json(groups_file, data)
         except Exception as e:
             return False
+
     
     @staticmethod
     def init_group_system() -> bool:
         """初始化分组系统"""
         try:
             user_files_dir = UserGroupManager.get_user_files_dir()
-            os.makedirs(user_files_dir, exist_ok=True)
+            user_files_dir.mkdir(parents=True, exist_ok=True)
             
-            default_file = os.path.join(user_files_dir, "default.json")
-            if not os.path.exists(default_file):
-                with open(default_file, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        "users": {},
-                        "next_id": 1,
-                        "empty_ids": [],
-                        "metadata": {
-                            "name": "默认用户文件",
-                            "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                    }, f, ensure_ascii=False, indent=2)
+            default_file = user_files_dir / "default.json"
+            if not default_file.exists():
+                initial_data = {
+                    "users": {},
+                    "next_id": 1,
+                    "empty_ids": [],
+                    "metadata": {
+                        "name": "默认用户文件",
+                        "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                }
+                DataEncryption.write_json(default_file, initial_data)
             
             groups_data = UserGroupManager.load_groups_data()
             if "groups" not in groups_data:
@@ -1086,6 +1093,7 @@ class UserGroupManager:
             
         except Exception as e:
             return False
+
     
     @staticmethod
     def create_group(group_name: str, description: str = "") -> bool:
@@ -1120,25 +1128,25 @@ class UserGroupManager:
             return False
     
     @staticmethod
-    def get_current_user_file() -> str:
-        """获取当前用户文件路径"""
+    def get_current_user_file() -> Path:
+        """获取当前用户文件路径（加密版）"""
         try:
             groups_data = UserGroupManager.load_groups_data()
             current_file = groups_data.get("current_file", "default.json")
             user_files_dir = UserGroupManager.get_user_files_dir()
-            return os.path.join(user_files_dir, current_file)
+            return user_files_dir / current_file
         except:
             user_files_dir = UserGroupManager.get_user_files_dir()
-            return os.path.join(user_files_dir, "default.json")
+            return user_files_dir / "default.json"
     
     @staticmethod
     def switch_user_file(file_name: str) -> bool:
         """切换当前用户文件"""
         try:
             user_files_dir = UserGroupManager.get_user_files_dir()
-            file_path = os.path.join(user_files_dir, file_name)
+            file_path = user_files_dir / file_name
             
-            if not os.path.exists(file_path):
+            if not file_path.exists():
                 safe_print(f"❌ 文件不存在: {file_name}")
                 return False
             
@@ -1155,6 +1163,7 @@ class UserGroupManager:
         except Exception as e:
             safe_print(f"❌ 切换文件失败: {str(e)}")
             return False
+
 
 # ==================== 用户文件管理 ====================
 class UserFileManagement:
@@ -1440,35 +1449,385 @@ class UITools:
                     return selection
                 safe_print(f"无效选择，请输入1-{exit_num}之间的数字")
 
-# ==================== 数据管理类 ====================
+# ==================== 四层加密防护系统 ====================
+
+class QuadLayerEncryption:
+    """四层加密防护系统"""
+
+    PBKDF2_ITERATIONS = 100000
+
+    @staticmethod
+    def get_machine_unique_id() -> bytes:
+        """获取机器唯一特征码"""
+        import subprocess
+        import platform
+        
+        machine_id = ""
+        
+        if platform.system() == "Windows":
+            try:
+                result = subprocess.run(
+                    ['wmic', 'baseboard', 'get', 'serialnumber'],
+                    capture_output=True, text=True, timeout=5
+                )
+                board_sn = result.stdout.strip().split('\n')[-1].strip()
+                if board_sn and 'To be filled' not in board_sn:
+                    machine_id += board_sn
+            except:
+                pass
+            
+            try:
+                result = subprocess.run(
+                    ['wmic', 'diskdrive', 'get', 'serialnumber'],
+                    capture_output=True, text=True, timeout=5
+                )
+                disk_sn = result.stdout.strip().split('\n')[-1].strip()
+                if disk_sn and disk_sn != 'SerialNumber':
+                    machine_id += disk_sn
+            except:
+                pass
+        
+        machine_id += platform.processor() or ""
+        machine_id += platform.node() or ""
+        machine_id += os.environ.get('COMPUTERNAME', '')
+        machine_id += os.environ.get('USERNAME', '')
+        
+        if len(machine_id) < 32:
+            machine_id = machine_id.ljust(32, 'X')
+        else:
+            machine_id = machine_id[:32]
+        
+        return machine_id.encode('utf-8')
+
+    @staticmethod
+    def generate_random_key(length: int = 32) -> str:
+        """第一关：生成高强度随机密钥"""
+        uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+        lowercase = 'abcdefghijkmnopqrstuvwxyz'
+        digits = '23456789'
+        symbols = '#$%&@?'
+        
+        key_chars = [
+            secrets.choice(uppercase),
+            secrets.choice(lowercase),
+            secrets.choice(digits),
+            secrets.choice(symbols),
+        ]
+        
+        all_chars = uppercase + lowercase + digits + symbols
+        for _ in range(length - 4):
+            key_chars.append(secrets.choice(all_chars))
+        
+        secrets.SystemRandom().shuffle(key_chars)
+        return ''.join(key_chars)
+
+    @staticmethod
+    def double_pbkdf2_hash(password: str) -> Tuple[bytes, bytes, bytes, bytes]:
+        """第二关：双层 PBKDF2 哈希（纯内置库版本）"""
+        import hashlib
+        
+        salt1 = secrets.token_bytes(32)
+        salt2 = secrets.token_bytes(32)
+        
+        hash1 = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt1,
+            QuadLayerEncryption.PBKDF2_ITERATIONS,
+            dklen=32
+        )
+        
+        hash2 = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt2,
+            QuadLayerEncryption.PBKDF2_ITERATIONS,
+            dklen=32
+        )
+        
+        return hash1, salt1, hash2, salt2
+
+    @staticmethod
+    def xor_mix(hash1: bytes, hash2: bytes, machine_id: bytes) -> bytes:
+        """第四关：异或混合"""
+        length = max(len(hash1), len(hash2), len(machine_id))
+        
+        h1 = hash1.ljust(length, b'\x00')
+        h2 = hash2.ljust(length, b'\x00')
+        mid = machine_id.ljust(length, b'\x00')
+        
+        result = bytes(h1[i] ^ h2[i] ^ mid[i] for i in range(length))
+        return result[:32]
+
+    @staticmethod
+    def create_encrypted_key() -> Tuple[bytes, dict]:
+        """创建四层加密的最终密钥"""
+        raw_key = QuadLayerEncryption.generate_random_key(32)
+        hash1, salt1, hash2, salt2 = QuadLayerEncryption.double_pbkdf2_hash(raw_key)
+        machine_id = QuadLayerEncryption.get_machine_unique_id()
+        final_key = QuadLayerEncryption.xor_mix(hash1, hash2, machine_id)
+        
+        metadata = {
+            'salt1': base64.b64encode(salt1).decode(),
+            'salt2': base64.b64encode(salt2).decode(),
+            'hash1': base64.b64encode(hash1).decode(),
+            'hash2': base64.b64encode(hash2).decode(),
+            'machine_id_hash': hashlib.sha256(machine_id).hexdigest(),
+            'pbkdf2_iterations': QuadLayerEncryption.PBKDF2_ITERATIONS,
+        }
+        
+        return final_key, metadata
+
+
+class SecureKeyFile:
+    """安全的密钥文件存储 (.pwos 格式)"""
+
+    @staticmethod
+    def save_key(key: bytes, metadata: dict, filepath: Path) -> bool:
+        MAGIC = b'PWKS'
+        VERSION = 1
+        
+        metadata_bytes = json.dumps(metadata, ensure_ascii=False).encode('utf-8')
+        
+        with open(filepath, 'wb') as f:
+            f.write(MAGIC)
+            f.write(struct.pack('B', VERSION))
+            f.write(struct.pack('>H', len(key)))
+            f.write(key)
+            f.write(struct.pack('>I', len(metadata_bytes)))
+            f.write(metadata_bytes)
+        
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(str(filepath), 2)
+            except:
+                pass
+        
+        return True
+
+    @staticmethod
+    def load_key(filepath: Path) -> Tuple[Optional[bytes], Optional[dict]]:
+        if not filepath.exists():
+            return None, None
+        
+        try:
+            with open(filepath, 'rb') as f:
+                magic = f.read(4)
+                if magic != b'PWKS':
+                    return None, None
+                
+                version = struct.unpack('B', f.read(1))[0]
+                if version != 1:
+                    return None, None
+                
+                key_len = struct.unpack('>H', f.read(2))[0]
+                key = f.read(key_len)
+                
+                metadata_len = struct.unpack('>I', f.read(4))[0]
+                metadata_bytes = f.read(metadata_len)
+                metadata = json.loads(metadata_bytes.decode('utf-8'))
+                
+                return key, metadata
+        except Exception:
+            return None, None
+
+
+class DataEncryption:
+    """数据加密管理器 - 整合四层加密"""
+
+    @staticmethod
+    def _get_key_file() -> Path:
+        """获取密钥文件路径（程序目录）"""
+        # 获取程序所在目录
+        if getattr(sys, 'frozen', False):
+            base_dir = Path(sys.executable).parent
+        else:
+            base_dir = Path(__file__).parent
+        
+        data_dir = base_dir / 'user_system_data'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / 'pwos_data.key'
+
+    @staticmethod
+    def get_encryption_key() -> bytes:
+        """获取加密密钥（返回 base64 格式）"""
+        from cryptography.fernet import Fernet
+        import base64
+        import hashlib
+        
+        key_file = DataEncryption._get_key_file()
+        
+        if key_file.exists():
+            with open(key_file, 'rb') as f:
+                raw_key = f.read()
+            
+            # 确保是 32 字节原始密钥
+            if len(raw_key) != 32:
+                raw_key = hashlib.sha256(raw_key).digest()
+                with open(key_file, 'wb') as f:
+                    f.write(raw_key)
+            
+            # 返回 base64 格式
+            return base64.urlsafe_b64encode(raw_key)
+        
+        # 首次运行，生成密钥
+        final_key, metadata = QuadLayerEncryption.create_encrypted_key()
+        
+        # 确保是 32 字节
+        if len(final_key) != 32:
+            final_key = hashlib.sha256(final_key).digest()
+        
+        # 保存原始密钥
+        with open(key_file, 'wb') as f:
+            f.write(final_key)
+        
+        # 返回 base64 格式
+        fernet_key = base64.urlsafe_b64encode(final_key)
+        
+        # 保存元数据
+        meta_file = key_file.parent / 'pwos_metadata.json'
+        with open(meta_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        return fernet_key
+
+    @staticmethod
+    def encrypt_bytes(data: bytes) -> bytes:
+        """加密字节数据"""
+        from cryptography.fernet import Fernet
+        
+        fernet_key = DataEncryption.get_encryption_key()
+        fernet = Fernet(fernet_key)  # 直接使用，不要再转换
+        return fernet.encrypt(data)
+
+    @staticmethod
+    def decrypt_bytes(encrypted: bytes) -> bytes:
+        """解密字节数据"""
+        from cryptography.fernet import Fernet
+        
+        fernet_key = DataEncryption.get_encryption_key()
+        fernet = Fernet(fernet_key)  # 直接使用，不要再转换
+        return fernet.decrypt(encrypted)
+
+    @staticmethod
+    def encrypt_file(filepath: Path) -> bool:
+        """加密文件"""
+        if not filepath.exists():
+            return False
+        
+        try:
+            with open(filepath, 'rb') as f:
+                data = f.read()
+            
+            encrypted = DataEncryption.encrypt_bytes(data)
+            
+            with open(filepath, 'wb') as f:
+                f.write(encrypted)
+            
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def decrypt_file(filepath: Path) -> Optional[bytes]:
+        """解密文件"""
+        if not filepath.exists():
+            return None
+        
+        try:
+            with open(filepath, 'rb') as f:
+                encrypted = f.read()
+            
+            return DataEncryption.decrypt_bytes(encrypted)
+        except Exception:
+            return None
+
+    @staticmethod
+    def read_json(filepath: Path):
+        """读取加密的 JSON 文件"""
+        decrypted = DataEncryption.decrypt_file(filepath)
+        if decrypted is None:
+            return None
+        return json.loads(decrypted.decode('utf-8'))
+
+    @staticmethod
+    def write_json(filepath: Path, data) -> bool:
+        """写入加密的 JSON 文件"""
+        json_str = json.dumps(data, ensure_ascii=False, indent=2)
+        encrypted = DataEncryption.encrypt_bytes(json_str.encode('utf-8'))
+        
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'wb') as f:
+            f.write(encrypted)
+        
+        return True
+
+
 class DataManagement:
+    
+    # ==================== 路径管理 ====================
+    @staticmethod
+    def _get_encrypted_data_dir() -> Path:
+        """获取加密数据存储目录（直接使用原 user_system_data 目录）"""
+        base_dir = DataManagement._get_base_dir()
+        return base_dir / 'user_system_data'
+
+
+    @staticmethod
+    def _get_base_dir() -> Path:
+        """程序所在目录"""
+        if getattr(sys, 'frozen', False):
+            return Path(sys.executable).parent
+        return Path(__file__).parent
+
+
+    
+    # ==================== 初始化 ====================
+    
     @staticmethod
     def init_system() -> bool:
-        """初始化系统"""
+        """初始化系统（加密版，完整功能）"""
         try:
-            os.makedirs(data_dir, exist_ok=True)
-            os.makedirs(backup_dir, exist_ok=True)
-            os.makedirs(update_package_dir, exist_ok=True)
+            # 加密数据目录（C盘）
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            user_files_dir = encrypted_dir / 'user_files'
             
-            if not os.path.exists(occupation_file):
+            encrypted_dir.mkdir(parents=True, exist_ok=True)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            user_files_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 脚本和更新包目录（程序目录明文存储）
+            base_dir = DataManagement._get_base_dir()
+            scripts_dir = base_dir / 'scripts'
+            update_dir = base_dir / 'update_packages'
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            update_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 检查并迁移旧版数据
+            #DataManagement.migrate_legacy_data()
+            
+            # 初始化职业列表（加密）
+            occupation_file = encrypted_dir / 'occupations.json'
+            if not occupation_file.exists():
                 default_occupations = ["学生", "教师", "工程师", "医生", "护士", "程序员", "设计师", "销售", "经理", "厨师", "司机", "公务员", "农民", "自由职业", "其他"]
-                with open(occupation_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_occupations, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化职业列表")
+                DataEncryption.write_json(occupation_file, default_occupations)
+                SystemLog.log("已初始化职业列表（加密）")
             
-            if not os.path.exists(user_file):
-                initial_data = {"users": {}, "next_id": 1, "empty_ids": []}
-                with open(user_file, 'w', encoding='utf-8') as f:
-                    json.dump(initial_data, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化用户数据库")
-            
-            if not os.path.exists(password_file):
+            # 初始化密码文件（加密）
+            password_file = encrypted_dir / 'secure_passwords.json'
+            if not password_file.exists():
                 DataManagement.save_secure_passwords([])
             
-            if not os.path.exists(version_file):
+            # 初始化版本文件
+            version_file = encrypted_dir / 'version.json'
+            if not version_file.exists():
                 DataManagement.save_version(3, 0)
             
-            if not os.path.exists(firewall_file):
+            # 初始化防火墙配置（加密）
+            firewall_file = encrypted_dir / 'firewall_rules.json'
+            if not firewall_file.exists():
                 default_firewall_rules = {
                     "enable_firewall": False,
                     "block_weak_passwords": True,
@@ -1476,114 +1835,117 @@ class DataManagement:
                     "session_timeout": 1800,
                     "audit_logging": True
                 }
-                with open(firewall_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_firewall_rules, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化防火墙配置")
+                DataEncryption.write_json(firewall_file, default_firewall_rules)
+                SystemLog.log("已初始化防火墙配置（加密）")
             
-            if not os.path.exists(ai_config_file):
+            # 初始化AI配置（加密）
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            if not ai_config_file.exists():
                 default_ai_config = {
                     "enable_ai": False,
                     "providers": {
-                        "deepseek": {
-                            "enabled": False,
-                            "api_key": "",
-                            "api_base": "https://api.deepseek.com",
-                            "model": "deepseek-chat"
-                        },
-                        "aliyun": {
-                            "enabled": False,
-                            "api_key": "",
-                            "api_base": "https://dashscope.aliyuncs.com",
-                            "model": "qwen-max"
-                        }
+                        "deepseek": {"enabled": False, "api_key": "", "api_base": "https://api.deepseek.com", "model": "deepseek-chat"},
+                        "aliyun": {"enabled": False, "api_key": "", "api_base": "https://dashscope.aliyuncs.com", "model": "qwen-max"}
                     },
                     "last_provider": "deepseek",
                     "temperature": 0.7,
                     "max_tokens": 1000
                 }
-                with open(ai_config_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_ai_config, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化AI配置")
+                DataEncryption.write_json(ai_config_file, default_ai_config)
+                SystemLog.log("已初始化AI配置（加密）")
             
-            if not os.path.exists(network_rules_file):
-                default_network_rules = {
-                    "blacklist": [],
-                    "whitelist": [],
-                    "description": "网络防火墙规则"
-                }
-                with open(network_rules_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_network_rules, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化网络规则")
+            # 初始化网络规则（加密）
+            network_rules_file = encrypted_dir / 'network_rules.json'
+            if not network_rules_file.exists():
+                default_network_rules = {"blacklist": [], "whitelist": [], "description": "网络防火墙规则"}
+                DataEncryption.write_json(network_rules_file, default_network_rules)
+                SystemLog.log("已初始化网络规则（加密）")
             
+            # 初始化默认用户文件（加密）
+            default_user_file = user_files_dir / 'default.json'
+            if not default_user_file.exists():
+                initial_data = {"users": {}, "next_id": 1, "empty_ids": []}
+                DataEncryption.write_json(default_user_file, initial_data)
+                SystemLog.log("已初始化默认用户文件（加密）")
+            
+            # 初始化分组系统
             UserGroupManager.init_group_system()
             
+            SystemLog.log("加密系统初始化完成")
             return True
+            
         except Exception as e:
             SystemLog.log(f"初始化系统失败: {str(e)}", "错误")
             return False
-
+    
+    # ==================== 密码管理 ====================
+    
     @staticmethod
     def load_secure_passwords() -> List[Tuple[str, str]]:
-        """加载安全的密码列表"""
+        """加载安全的密码列表（从加密文件）"""
         try:
-            if not os.path.exists(password_file):
-                return []
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            password_file = encrypted_dir / 'secure_passwords.json'
             
-            with open(password_file, 'r', encoding='utf-8') as f:
-                passwords_data = json.load(f)
-            
-            if not passwords_data:
-                return []
-            
-            if isinstance(passwords_data, list) and len(passwords_data) > 0:
-                if isinstance(passwords_data[0], dict) and "salt" in passwords_data[0] and "hash" in passwords_data[0]:
-                    return [(p["salt"], p["hash"]) for p in passwords_data]
-            
+            if password_file.exists():
+                passwords_data = DataEncryption.read_json(password_file)
+                if passwords_data and isinstance(passwords_data, list):
+                    if len(passwords_data) > 0 and isinstance(passwords_data[0], dict):
+                        return [(p["salt"], p["hash"]) for p in passwords_data]
             return []
         except Exception:
             return []
 
     @staticmethod
     def save_secure_passwords(passwords: List[Tuple[str, str]]) -> bool:
-        """保存安全的密码列表"""
+        """保存安全的密码列表（加密存储）"""
         try:
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            password_file = encrypted_dir / 'secure_passwords.json'
             passwords_data = [{"salt": salt, "hash": pwd_hash} for salt, pwd_hash in passwords]
-            
-            with open(password_file, 'w', encoding='utf-8') as f:
-                json.dump(passwords_data, f, ensure_ascii=False, indent=2)
-            return True
+            return DataEncryption.write_json(password_file, passwords_data)
         except Exception:
             return False
 
+    # ==================== 版本管理 ====================
+    
     @staticmethod
     def save_version(major: int, minor: int) -> bool:
-        """保存版本号"""
+        """保存版本号（加密存储）"""
         try:
-            with open(version_file, 'w', encoding='utf-8') as f:
-                json.dump({"major": major, "minor": minor}, f, ensure_ascii=False, indent=2)
-            return True
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            version_file = encrypted_dir / 'version.json'
+            return DataEncryption.write_json(version_file, {"major": major, "minor": minor})
         except Exception:
             return False
 
     @staticmethod
     def load_version() -> str:
-        """加载版本号"""
+        """加载版本号（从加密文件）"""
         try:
-            with open(version_file, 'r', encoding='utf-8') as f:
-                v = json.load(f)
-            return f"{v['major']}.{v['minor']}"
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            version_file = encrypted_dir / 'version.json'
+            if version_file.exists():
+                v = DataEncryption.read_json(version_file)
+                if v:
+                    return f"{v['major']}.{v['minor']}"
+            return "3.0"
         except Exception:
             return "3.0"
 
+    # ==================== 用户数据管理（支持分组系统） ====================
+    
     @staticmethod
     def load_user_data() -> Dict[str, Any]:
-        """加载用户数据（支持分组系统）"""
+        """加载用户数据（从加密文件，支持分组系统）"""
         try:
             current_file = UserGroupManager.get_current_user_file()
             
-            if os.path.exists(current_file):
-                with open(current_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            # current_file 现在是 Path 对象
+            if current_file.exists():
+                data = DataEncryption.read_json(current_file)
+                if data is not None:
+                    return data
             
             return {"users": {}, "next_id": 1, "empty_ids": []}
         except Exception as e:
@@ -1592,10 +1954,10 @@ class DataManagement:
 
     @staticmethod
     def save_user_data(data: Dict[str, Any]) -> bool:
-        """保存用户数据（支持分组系统）"""
+        """保存用户数据（加密存储，支持分组系统）"""
         try:
             current_file = UserGroupManager.get_current_user_file()
-            os.makedirs(os.path.dirname(current_file), exist_ok=True)
+            current_file.parent.mkdir(parents=True, exist_ok=True)
             
             if "metadata" not in data:
                 data["metadata"] = {}
@@ -1604,62 +1966,63 @@ class DataManagement:
             if "users" in data:
                 data["metadata"]["user_count"] = len(data["users"])
             
-            with open(current_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            result = DataEncryption.write_json(current_file, data)
             
-            SystemLog.log(f"保存用户数据到: {os.path.basename(current_file)}", "信息")
-            return True
+            if result:
+                SystemLog.log(f"保存用户数据到: {current_file.name}", "信息")
+            return result
+            
         except Exception as e:
             SystemLog.log(f"保存用户数据失败: {str(e)}", "错误")
             return False
 
+    # ==================== 备份管理（完整版，支持新版/旧版格式） ====================
+    
     @staticmethod
     def create_backup() -> bool:
-        """创建备份（支持分组系统）"""
+        """创建备份（支持分组系统，加密版）"""
         try:
             current_file = UserGroupManager.get_current_user_file()
-            file_name = os.path.basename(current_file)
-            file_base_name = os.path.splitext(file_name)[0]  # 移除扩展名
+            file_name = current_file.name
+            file_base_name = current_file.stem
             
-            if not os.path.exists(current_file):
-                safe_print(f"❌ 用户文件不存在: {current_file}")
+            if not current_file.exists():
+                safe_print(f"❌ 用户文件不存在: {file_name}")
                 return False
             
-            os.makedirs(backup_dir, exist_ok=True)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            backup_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            # 使用实际文件名作为备份文件名
-            backup_file = os.path.join(backup_dir, f"{file_base_name}_{timestamp}.json")
+            # 使用实际文件名作为备份文件名（新版格式）
+            backup_file = backup_dir / f"{file_base_name}_{timestamp}.json"
             
-            with open(current_file, 'r', encoding='utf-8') as src:
-                with open(backup_file, 'w', encoding='utf-8') as dst:
-                    dst.write(src.read())
+            # 备份解密后的数据（明文备份，方便恢复）
+            data = DataManagement.load_user_data()
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
             
             # 清理旧备份（只保留每个文件最新的5个备份）
             backup_files = {}
-            for f in os.listdir(backup_dir):
-                if f.endswith('.json'):
-                    parts = f.rsplit('_', 2)  # 分割格式: filename_YYYYMMDD_HHMMSS.json
-                    if len(parts) >= 2:
-                        file_prefix = '_'.join(parts[:-2]) if len(parts) > 2 else parts[0]
-                        if file_prefix not in backup_files:
-                            backup_files[file_prefix] = []
-                        backup_files[file_prefix].append(f)
+            for f in backup_dir.glob("*.json"):
+                # 解析文件名格式
+                parts = f.stem.rsplit('_', 2)
+                if len(parts) >= 2:
+                    file_prefix = '_'.join(parts[:-2]) if len(parts) > 2 else parts[0]
+                    if file_prefix not in backup_files:
+                        backup_files[file_prefix] = []
+                    backup_files[file_prefix].append(f)
             
             for file_prefix, files in backup_files.items():
                 if len(files) > 5:
-                    files.sort(key=lambda x: os.path.getctime(os.path.join(backup_dir, x)))
+                    files.sort(key=lambda x: x.stat().st_ctime)
                     for old_backup in files[:-5]:
-                        old_backup_path = os.path.join(backup_dir, old_backup)
-                        if os.path.exists(old_backup_path):
-                            try:
-                                os.remove(old_backup_path)
-                                SystemLog.log(f"清理旧备份: {old_backup}", "信息")
-                            except Exception as e:
-                                SystemLog.log(f"删除旧备份失败 {old_backup}: {str(e)}", "警告")
+                        old_backup.unlink()
+                        SystemLog.log(f"清理旧备份: {old_backup.name}", "信息")
             
-            backup_size = os.path.getsize(backup_file)
-            safe_print(f"✅ 备份创建成功: {os.path.basename(backup_file)} ({backup_size} 字节)")
+            backup_size = backup_file.stat().st_size
+            safe_print(f"✅ 备份创建成功: {backup_file.name} ({backup_size} 字节)")
             SystemLog.log(f"已创建备份: {backup_file} ({backup_size} 字节)")
             
             return True
@@ -1672,53 +2035,46 @@ class DataManagement:
     def get_backup_list() -> List[Dict[str, Any]]:
         """获取备份列表（支持分组系统和旧版备份）"""
         try:
-            if not os.path.exists(backup_dir):
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            
+            if not backup_dir.exists():
                 return []
             
             # 获取当前用户文件名
             current_file = UserGroupManager.get_current_user_file()
-            current_file_name = os.path.basename(current_file)
-            file_base_name = os.path.splitext(current_file_name)[0]
+            current_file_name = current_file.name
+            file_base_name = current_file.stem
             
             backup_list = []
-            for f in os.listdir(backup_dir):
-                if f.endswith('.json'):
-                    file_path = os.path.join(backup_dir, f)
-                    
-                    # 检查是否为当前文件的备份
-                    is_current_file_backup = False
-                    backup_type = "其他"
-                    
-                    # 情况1：新格式备份 - default_20241020_143025.json
-                    if f.startswith(file_base_name + '_'):
+            for f in backup_dir.glob("*.json"):
+                # 检查是否为当前文件的备份
+                is_current_file_backup = False
+                backup_type = "其他"
+                
+                # 情况1：新格式备份 - default_20241020_143025.json
+                if f.name.startswith(file_base_name + '_'):
+                    is_current_file_backup = True
+                    backup_type = "新版格式"
+                
+                # 情况2：旧格式备份 - users_20241020_143025.json
+                elif f.name.startswith('users_'):
+                    if current_file_name == 'default.json':
                         is_current_file_backup = True
-                        backup_type = "新版格式"
-                    
-                    # 情况2：旧格式备份 - users_20241020_143025.json
-                    elif f.startswith('users_'):
-                        # 旧版备份 users_*.json 对应 default.json
-                        if current_file_name == 'default.json':
-                            is_current_file_backup = True
-                            backup_type = "旧版格式"
-                        else:
-                            # 对于其他文件，旧版备份可能不适用
-                            backup_type = "旧版通用"
-                    
-                    # 情况3：其他文件备份 - testfile_20241020_143025.json
+                        backup_type = "旧版格式"
                     else:
-                        backup_type = "其他文件"
-                    
-                    backup_info = {
-                        "filename": f,
-                        "is_current_file": is_current_file_backup,
-                        "path": file_path,
-                        "file_size": os.path.getsize(file_path),
-                        "modified_time": os.path.getmtime(file_path),
-                        "backup_type": backup_type
-                    }
-                    backup_list.append(backup_info)
+                        backup_type = "旧版通用"
+                
+                backup_info = {
+                    "filename": f.name,
+                    "is_current_file": is_current_file_backup,
+                    "path": str(f),
+                    "file_size": f.stat().st_size,
+                    "modified_time": f.stat().st_mtime,
+                    "backup_type": backup_type
+                }
+                backup_list.append(backup_info)
             
-            # 按修改时间排序（最新的在前）
             backup_list.sort(key=lambda x: x["modified_time"], reverse=True)
             return backup_list
         except Exception as e:
@@ -1729,29 +2085,31 @@ class DataManagement:
     def restore_backup(backup_filename: str) -> Tuple[bool, str]:
         """恢复备份（支持新旧版本备份）"""
         try:
-            if not os.path.exists(backup_dir):
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            
+            if not backup_dir.exists():
                 return False, "备份目录不存在"
             
-            backup_file_path = os.path.join(backup_dir, backup_filename)
-            if not os.path.exists(backup_file_path):
+            backup_file = backup_dir / backup_filename
+            if not backup_file.exists():
                 return False, "备份文件不存在"
             
             # 加载备份数据
-            backup_data = None
-            with open(backup_file_path, 'r', encoding='utf-8') as src:
-                backup_data = json.load(src)
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                backup_data = json.load(f)
             
             if not backup_data or "users" not in backup_data:
                 return False, "备份文件格式无效"
             
             # 获取当前用户文件路径
             current_file = UserGroupManager.get_current_user_file()
-            current_file_name = os.path.basename(current_file)
+            current_file_name = current_file.name
             
             # 检查是否为旧版备份
             is_old_version = backup_filename.startswith('users_')
             
-            # 如果是旧版备份且当前文件不是default.json，需要提示
+            # 如果是旧版备份且当前文件不是default.json，需要提示并切换
             if is_old_version and current_file_name != 'default.json':
                 safe_print("⚠️  旧版备份(users_*.json)只能恢复到default.json")
                 safe_print(f"   当前文件: {current_file_name}")
@@ -1777,20 +2135,20 @@ class DataManagement:
                     }
                 safe_print("🔄 正在转换旧版备份格式...")
             
-            # 恢复备份到当前用户文件
-            with open(current_file, 'w', encoding='utf-8') as dst:
-                json.dump(backup_data, dst, ensure_ascii=False, indent=2)
+            # 恢复备份到当前用户文件（加密保存）
+            result = DataEncryption.write_json(current_file, backup_data)
             
-            # 验证恢复是否成功
-            restored_data = DataManagement.load_user_data()
-            user_count = len(restored_data.get("users", {}))
-            
-            if is_old_version:
-                SystemLog.log(f"已从旧版备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户，已转换格式)")
-                return True, f"成功从旧版备份恢复数据到 {current_file_name} (恢复用户数: {user_count}，已自动转换格式)"
+            if result:
+                user_count = len(backup_data.get("users", {}))
+                if is_old_version:
+                    SystemLog.log(f"已从旧版备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户，已转换格式)")
+                    return True, f"成功从旧版备份恢复数据到 {current_file_name} (恢复用户数: {user_count}，已自动转换格式)"
+                else:
+                    SystemLog.log(f"已从备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户)")
+                    return True, f"成功从备份恢复数据到 {current_file_name} (恢复用户数: {user_count})"
             else:
-                SystemLog.log(f"已从备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户)")
-                return True, f"成功从备份恢复数据到 {current_file_name} (恢复用户数: {user_count})"
+                return False, "恢复失败"
+            
         except Exception as e:
             error_info = f"恢复备份失败: {str(e)}"
             SystemLog.log(error_info, "错误")
@@ -1804,7 +2162,7 @@ class DataManagement:
             
             # 获取当前用户文件信息
             current_file = UserGroupManager.get_current_user_file()
-            current_file_name = os.path.basename(current_file)
+            current_file_name = current_file.name
             safe_print(f"当前用户文件: {current_file_name}")
             safe_print("ℹ️  旧版备份(users_*.json)只适用于default.json文件")
             safe_print("-" * 50)
@@ -1825,14 +2183,11 @@ class DataManagement:
                 if backup["is_current_file"]:
                     current_file_backups.append(backup)
                 elif backup["backup_type"] == "旧版通用" and current_file_name == 'default.json':
-                    # 旧版users_备份也可以用于default.json
                     old_version_backups.append(backup)
                 else:
                     other_backups.append(backup)
             
             # 显示可用的备份
-            display_count = 0
-            
             # 显示当前文件的新版备份
             if current_file_backups:
                 safe_print(f"\n=== {current_file_name} 的备份 (新版格式) ===")
@@ -1842,30 +2197,23 @@ class DataManagement:
                     file_time = datetime.datetime.fromtimestamp(backup["modified_time"]).strftime("%Y-%m-%d %H:%M")
                     file_size_kb = backup["file_size"] / 1024
                     safe_print(f"{i:2d}.  | {backup['filename']:<25} | {file_time} | {backup['backup_type']}")
-                    display_count += 1
             
             # 显示旧版备份（仅当当前文件是default.json时）
             if old_version_backups and current_file_name == 'default.json':
-                if not current_file_backups:
-                    safe_print(f"\n=== 旧版备份 (users_*.json) ===")
-                    safe_print("序号 | 备份文件名                | 创建时间        | 类型")
-                    safe_print("-" * 70)
-                    start_index = 1
-                else:
-                    safe_print(f"\n=== 旧版备份 (users_*.json) ===")
-                    start_index = len(current_file_backups) + 1
-                
+                start_index = len(current_file_backups) + 1
+                safe_print(f"\n=== 旧版备份 (users_*.json) ===")
+                safe_print("序号 | 备份文件名                | 创建时间        | 类型")
+                safe_print("-" * 70)
                 for i, backup in enumerate(old_version_backups, start_index):
                     file_time = datetime.datetime.fromtimestamp(backup["modified_time"]).strftime("%Y-%m-%d %H:%M")
                     file_size_kb = backup["file_size"] / 1024
                     safe_print(f"{i:2d}.  | {backup['filename']:<25} | {file_time} | {backup['backup_type']}")
-                    display_count += 1
             
             if other_backups:
                 safe_print(f"\n=== 其他文件的备份 ===")
-                for backup in other_backups[:3]:  # 只显示前3个
+                for backup in other_backups[:3]:
                     file_time = datetime.datetime.fromtimestamp(backup["modified_time"]).strftime("%Y-%m-%d %H:%M")
-                    safe_print(f"  • {backup['filename']} - {file_time} ({backup['backup_type']})")
+                    safe_print(f"  • {backup['filename']} - {file_time}")
                 if len(other_backups) > 3:
                     safe_print(f"  还有 {len(other_backups) - 3} 个其他备份...")
             
@@ -1875,8 +2223,8 @@ class DataManagement:
                     safe_print("💡 提示：旧版备份(users_*.json)只适用于default.json文件")
                 return
             
+            total_options = len(current_file_backups) + len(old_version_backups)
             while True:
-                total_options = len(current_file_backups) + len(old_version_backups)
                 selection = input(f"\n请选择要恢复的备份编号(1-{total_options})或输入0取消: ").strip()
                 if selection == "0":
                     safe_print("恢复操作已取消")
@@ -1885,7 +2233,6 @@ class DataManagement:
                 if selection.isdigit():
                     num = int(selection)
                     if 1 <= num <= total_options:
-                        # 确定选择的是哪个备份
                         if num <= len(current_file_backups):
                             selected_backup = current_file_backups[num - 1]
                         else:
@@ -1908,8 +2255,7 @@ class DataManagement:
                             backup_user_count = len(backup_data.get("users", {}))
                             safe_print(f"   备份用户数: {backup_user_count}")
                             
-                            # 检查是否为旧版备份
-                            if selected_backup['backup_type'] == "旧版格式" or selected_backup['backup_type'] == "旧版通用":
+                            if selected_backup['backup_type'] in ["旧版格式", "旧版通用"]:
                                 safe_print("   ⚠️  这是旧版格式备份")
                                 safe_print("   💡 系统将自动转换格式")
                         except:
@@ -1921,8 +2267,6 @@ class DataManagement:
                             if success:
                                 safe_print(f"✅ {message}")
                                 time.sleep(1)
-                                safe_print("\n恢复后系统信息:")
-                                # 显示恢复后的数据
                                 restored_data = DataManagement.load_user_data()
                                 user_count = len(restored_data.get("users", {}))
                                 safe_print(f"✅ 恢复成功！当前用户数: {user_count}")
@@ -1941,13 +2285,18 @@ class DataManagement:
             safe_print(f"❌ 数据恢复过程中发生错误: {str(e)}")
             SystemLog.log(f"数据恢复失败: {str(e)}", "错误")
 
+    # ==================== 配置管理 ====================
+    
     @staticmethod
     def load_occupation_list() -> List[str]:
-        """加载职业列表"""
+        """加载职业列表（从加密文件）"""
         try:
-            if os.path.exists(occupation_file):
-                with open(occupation_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            occupation_file = encrypted_dir / 'occupations.json'
+            if occupation_file.exists():
+                data = DataEncryption.read_json(occupation_file)
+                if data:
+                    return data
             return []
         except Exception as e:
             SystemLog.log(f"加载职业列表失败: {str(e)}", "错误")
@@ -1955,11 +2304,14 @@ class DataManagement:
 
     @staticmethod
     def load_firewall_config() -> Dict[str, Any]:
-        """加载防火墙配置"""
+        """加载防火墙配置（从加密文件）"""
         try:
-            if os.path.exists(firewall_file):
-                with open(firewall_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            firewall_file = encrypted_dir / 'firewall_rules.json'
+            if firewall_file.exists():
+                data = DataEncryption.read_json(firewall_file)
+                if data:
+                    return data
             return {}
         except Exception as e:
             SystemLog.log(f"加载防火墙配置失败: {str(e)}", "错误")
@@ -1967,11 +2319,14 @@ class DataManagement:
 
     @staticmethod
     def load_network_rules() -> Dict[str, Any]:
-        """加载网络规则"""
+        """加载网络规则（从加密文件）"""
         try:
-            if os.path.exists(network_rules_file):
-                with open(network_rules_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            network_rules_file = encrypted_dir / 'network_rules.json'
+            if network_rules_file.exists():
+                data = DataEncryption.read_json(network_rules_file)
+                if data:
+                    return data
             return {"blacklist": [], "whitelist": [], "description": "网络防火墙规则"}
         except Exception as e:
             SystemLog.log(f"加载网络规则失败: {str(e)}", "错误")
@@ -1979,20 +2334,50 @@ class DataManagement:
 
     @staticmethod
     def save_network_rules(rules: Dict[str, Any]) -> bool:
-        """保存网络规则"""
+        """保存网络规则（加密存储）"""
         try:
-            with open(network_rules_file, 'w', encoding='utf-8') as f:
-                json.dump(rules, f, ensure_ascii=False, indent=2)
-            return True
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            network_rules_file = encrypted_dir / 'network_rules.json'
+            return DataEncryption.write_json(network_rules_file, rules)
         except Exception as e:
             SystemLog.log(f"保存网络规则失败: {str(e)}", "错误")
             return False
 
     @staticmethod
+    def load_ai_config() -> Optional[Dict[str, Any]]:
+        """加载AI配置（从加密文件）"""
+        try:
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            if ai_config_file.exists():
+                return DataEncryption.read_json(ai_config_file)
+            return None
+        except Exception as e:
+            SystemLog.log(f"加载AI配置失败: {str(e)}", "错误")
+            return None
+
+    @staticmethod
+    def save_ai_config(config: Dict[str, Any]) -> bool:
+        """保存AI配置（加密存储）"""
+        try:
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            return DataEncryption.write_json(ai_config_file, config)
+        except Exception as e:
+            SystemLog.log(f"保存AI配置失败: {str(e)}", "错误")
+            return False
+
+    # ==================== 增强备份 ====================
+    
+    @staticmethod
     def enhanced_backup() -> Tuple[bool, str]:
         """增强的备份功能"""
         try:
             safe_print("\n📦 正在创建增强备份...")
+            
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            backup_dir.mkdir(parents=True, exist_ok=True)
             
             # 1. 备份用户数据
             backup_success = DataManagement.create_backup()
@@ -2002,20 +2387,32 @@ class DataManagement:
             # 2. 备份系统文件
             current_file = sys.argv[0] if sys.argv else __file__
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            system_backup_file = os.path.join(backup_dir, f"system_{timestamp}.py")
+            system_backup_file = backup_dir / f"system_{timestamp}.py"
             shutil.copy2(current_file, system_backup_file)
             
             # 3. 备份配置文件
-            config_files = [occupation_file, firewall_file, network_rules_file, ai_config_file]
-            config_backup_dir = os.path.join(backup_dir, f"config_{timestamp}")
-            os.makedirs(config_backup_dir, exist_ok=True)
+            config_files = [
+                encrypted_dir / 'occupations.json',
+                encrypted_dir / 'firewall_rules.json',
+                encrypted_dir / 'network_rules.json',
+                encrypted_dir / 'ai_config.json'
+            ]
+            config_backup_dir = backup_dir / f"config_{timestamp}"
+            config_backup_dir.mkdir(parents=True, exist_ok=True)
             
             for config_file in config_files:
-                if os.path.exists(config_file):
-                    shutil.copy2(config_file, os.path.join(config_backup_dir, os.path.basename(config_file)))
+                if config_file.exists():
+                    shutil.copy2(config_file, config_backup_dir / config_file.name)
             
-            # 4. 创建备份报告
-            report_file = os.path.join(backup_dir, f"backup_report_{timestamp}.txt")
+            # 4. 备份用户文件目录
+            user_files_dir = encrypted_dir / 'user_files'
+            if user_files_dir.exists():
+                user_files_backup_dir = backup_dir / f"user_files_{timestamp}"
+                shutil.copytree(user_files_dir, user_files_backup_dir)
+                safe_print(f"  ✅ 已备份用户文件目录")
+            
+            # 5. 创建备份报告
+            report_file = backup_dir / f"backup_report_{timestamp}.txt"
             with open(report_file, 'w', encoding='utf-8') as f:
                 f.write(f"PWOS3 系统备份报告\n")
                 f.write(f"备份时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -2023,6 +2420,7 @@ class DataManagement:
                 f.write(f"备份文件:\n")
                 f.write(f"  • 系统文件: {system_backup_file}\n")
                 f.write(f"  • 配置文件: {config_backup_dir}/\n")
+                f.write(f"  • 用户文件: {user_files_backup_dir}/ (如果有)\n")
                 f.write(f"  • 用户数据: 已备份到备份目录\n")
             
             safe_print("✅ 增强备份创建完成")
@@ -2882,7 +3280,11 @@ class NetworkFirewall:
     def init() -> bool:
         """初始化网络防火墙"""
         try:
-            if not os.path.exists(firewall_file):
+            # 改用加密目录的路径
+            data_dir = DataManagement._get_encrypted_data_dir()
+            firewall_file = data_dir / 'firewall_rules.json'
+            
+            if not firewall_file.exists():
                 return False
             
             config = DataManagement.load_firewall_config()
@@ -5469,6 +5871,10 @@ import threading
 import ctypes
 from typing import Optional, Tuple, List, Dict, Any
 import secrets
+from pathlib import Path
+import base64
+import struct
+from typing import Optional
 
 # ==================== 初始化设置 ====================
 _script_cache = None  # 放在文件顶部，类外面
@@ -5957,7 +6363,7 @@ password_file = os.path.join(data_dir, "secure_passwords.json")
 version_file = os.path.join(data_dir, "version.json")
 update_package_dir = os.path.join(_BASE_DIR, "update_packages")
 firewall_file = os.path.join(data_dir, "firewall_rules.json")
-ai_config_file = os.path.join(data_dir, "ai_config.json")
+#ai_config_file = os.path.join(data_dir, "ai_config.json")
 network_rules_file = os.path.join(data_dir, "network_rules.json")
 
 system_name = "PWOS3"
@@ -6455,23 +6861,27 @@ class UserGroupManager:
     """用户分组管理器"""
     
     @staticmethod
-    def get_user_files_dir() -> str:
-        """获取用户文件目录"""
-        return os.path.join(data_dir, "user_files")
+    def get_user_files_dir() -> Path:
+        """获取用户文件目录（加密版）"""
+        data_dir = DataManagement._get_encrypted_data_dir()
+        return data_dir / 'user_files'
     
     @staticmethod
-    def get_groups_file() -> str:
-        """获取分组配置文件路径"""
-        return os.path.join(data_dir, "groups.json")
+    def get_groups_file() -> Path:
+        """获取分组配置文件路径（加密版）"""
+        data_dir = DataManagement._get_encrypted_data_dir()
+        return data_dir / 'groups.json'
+
     
     @staticmethod
     def load_groups_data() -> Dict[str, Any]:
-        """加载分组数据"""
+        """加载分组数据（从加密文件）"""
         try:
             groups_file = UserGroupManager.get_groups_file()
-            if os.path.exists(groups_file):
-                with open(groups_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            if groups_file.exists():
+                data = DataEncryption.read_json(groups_file)
+                if data:
+                    return data
             return {
                 "groups": {},
                 "ungrouped_files": [],
@@ -6485,16 +6895,15 @@ class UserGroupManager:
                 "current_file": "default.json",
                 "version": "1.0"
             }
+
     
     @staticmethod
     def save_groups_data(data: Dict[str, Any]) -> bool:
-        """保存分组数据"""
+        """保存分组数据（加密存储）"""
         try:
             groups_file = UserGroupManager.get_groups_file()
-            os.makedirs(os.path.dirname(groups_file), exist_ok=True)
-            with open(groups_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            return True
+            groups_file.parent.mkdir(parents=True, exist_ok=True)
+            return DataEncryption.write_json(groups_file, data)
         except Exception as e:
             return False
     
@@ -6503,20 +6912,20 @@ class UserGroupManager:
         """初始化分组系统"""
         try:
             user_files_dir = UserGroupManager.get_user_files_dir()
-            os.makedirs(user_files_dir, exist_ok=True)
+            user_files_dir.mkdir(parents=True, exist_ok=True)
             
-            default_file = os.path.join(user_files_dir, "default.json")
-            if not os.path.exists(default_file):
-                with open(default_file, 'w', encoding='utf-8') as f:
-                    json.dump({
-                        "users": {},
-                        "next_id": 1,
-                        "empty_ids": [],
-                        "metadata": {
-                            "name": "默认用户文件",
-                            "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        }
-                    }, f, ensure_ascii=False, indent=2)
+            default_file = user_files_dir / "default.json"
+            if not default_file.exists():
+                initial_data = {
+                    "users": {},
+                    "next_id": 1,
+                    "empty_ids": [],
+                    "metadata": {
+                        "name": "默认用户文件",
+                        "create_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                }
+                DataEncryption.write_json(default_file, initial_data)
             
             groups_data = UserGroupManager.load_groups_data()
             if "groups" not in groups_data:
@@ -6570,25 +6979,26 @@ class UserGroupManager:
             return False
     
     @staticmethod
-    def get_current_user_file() -> str:
-        """获取当前用户文件路径"""
+    def get_current_user_file() -> Path:
+        """获取当前用户文件路径（加密版）"""
         try:
             groups_data = UserGroupManager.load_groups_data()
             current_file = groups_data.get("current_file", "default.json")
             user_files_dir = UserGroupManager.get_user_files_dir()
-            return os.path.join(user_files_dir, current_file)
+            return user_files_dir / current_file
         except:
             user_files_dir = UserGroupManager.get_user_files_dir()
-            return os.path.join(user_files_dir, "default.json")
+            return user_files_dir / "default.json"
+
     
     @staticmethod
     def switch_user_file(file_name: str) -> bool:
         """切换当前用户文件"""
         try:
             user_files_dir = UserGroupManager.get_user_files_dir()
-            file_path = os.path.join(user_files_dir, file_name)
+            file_path = user_files_dir / file_name
             
-            if not os.path.exists(file_path):
+            if not file_path.exists():
                 safe_print(f"❌ 文件不存在: {file_name}")
                 return False
             
@@ -6890,37 +7300,384 @@ class UITools:
                         return "exit"
                     return selection
                 safe_print(f"无效选择，请输入1-{exit_num}之间的数字")
+# ==================== 四层加密防护系统 ====================
+
+class QuadLayerEncryption:
+    """四层加密防护系统"""
+
+    PBKDF2_ITERATIONS = 100000
+
+    @staticmethod
+    def get_machine_unique_id() -> bytes:
+        """获取机器唯一特征码"""
+        import subprocess
+        import platform
+        
+        machine_id = ""
+        
+        if platform.system() == "Windows":
+            try:
+                result = subprocess.run(
+                    ['wmic', 'baseboard', 'get', 'serialnumber'],
+                    capture_output=True, text=True, timeout=5
+                )
+                board_sn = result.stdout.strip().split('\n')[-1].strip()
+                if board_sn and 'To be filled' not in board_sn:
+                    machine_id += board_sn
+            except:
+                pass
+            
+            try:
+                result = subprocess.run(
+                    ['wmic', 'diskdrive', 'get', 'serialnumber'],
+                    capture_output=True, text=True, timeout=5
+                )
+                disk_sn = result.stdout.strip().split('\n')[-1].strip()
+                if disk_sn and disk_sn != 'SerialNumber':
+                    machine_id += disk_sn
+            except:
+                pass
+        
+        machine_id += platform.processor() or ""
+        machine_id += platform.node() or ""
+        machine_id += os.environ.get('COMPUTERNAME', '')
+        machine_id += os.environ.get('USERNAME', '')
+        
+        if len(machine_id) < 32:
+            machine_id = machine_id.ljust(32, 'X')
+        else:
+            machine_id = machine_id[:32]
+        
+        return machine_id.encode('utf-8')
+
+    @staticmethod
+    def generate_random_key(length: int = 32) -> str:
+        """第一关：生成高强度随机密钥"""
+        uppercase = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+        lowercase = 'abcdefghijkmnopqrstuvwxyz'
+        digits = '23456789'
+        symbols = '#$%&@?'
+        
+        key_chars = [
+            secrets.choice(uppercase),
+            secrets.choice(lowercase),
+            secrets.choice(digits),
+            secrets.choice(symbols),
+        ]
+        
+        all_chars = uppercase + lowercase + digits + symbols
+        for _ in range(length - 4):
+            key_chars.append(secrets.choice(all_chars))
+        
+        secrets.SystemRandom().shuffle(key_chars)
+        return ''.join(key_chars)
+
+    @staticmethod
+    def double_pbkdf2_hash(password: str) -> Tuple[bytes, bytes, bytes, bytes]:
+        """第二关：双层 PBKDF2 哈希（纯内置库版本）"""
+        import hashlib
+        
+        salt1 = secrets.token_bytes(32)
+        salt2 = secrets.token_bytes(32)
+        
+        hash1 = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt1,
+            QuadLayerEncryption.PBKDF2_ITERATIONS,
+            dklen=32
+        )
+        
+        hash2 = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt2,
+            QuadLayerEncryption.PBKDF2_ITERATIONS,
+            dklen=32
+        )
+        
+        return hash1, salt1, hash2, salt2
 
 
-# ==================== 数据管理类 ====================
+    @staticmethod
+    def xor_mix(hash1: bytes, hash2: bytes, machine_id: bytes) -> bytes:
+        """第四关：异或混合"""
+        length = max(len(hash1), len(hash2), len(machine_id))
+        
+        h1 = hash1.ljust(length, b'\x00')
+        h2 = hash2.ljust(length, b'\x00')
+        mid = machine_id.ljust(length, b'\x00')
+        
+        result = bytes(h1[i] ^ h2[i] ^ mid[i] for i in range(length))
+        return result[:32]
+
+    @staticmethod
+    def create_encrypted_key() -> Tuple[bytes, dict]:
+        """创建四层加密的最终密钥"""
+        raw_key = QuadLayerEncryption.generate_random_key(32)
+        hash1, salt1, hash2, salt2 = QuadLayerEncryption.double_pbkdf2_hash(raw_key)
+        machine_id = QuadLayerEncryption.get_machine_unique_id()
+        final_key = QuadLayerEncryption.xor_mix(hash1, hash2, machine_id)
+        
+        metadata = {
+            'salt1': base64.b64encode(salt1).decode(),
+            'salt2': base64.b64encode(salt2).decode(),
+            'hash1': base64.b64encode(hash1).decode(),
+            'hash2': base64.b64encode(hash2).decode(),
+            'machine_id_hash': hashlib.sha256(machine_id).hexdigest(),
+            'pbkdf2_iterations': QuadLayerEncryption.PBKDF2_ITERATIONS,
+        }
+        
+        return final_key, metadata
+
+
+class SecureKeyFile:
+    """安全的密钥文件存储 (.pwos 格式)"""
+
+    @staticmethod
+    def save_key(key: bytes, metadata: dict, filepath: Path) -> bool:
+        MAGIC = b'PWKS'
+        VERSION = 1
+        
+        metadata_bytes = json.dumps(metadata, ensure_ascii=False).encode('utf-8')
+        
+        with open(filepath, 'wb') as f:
+            f.write(MAGIC)
+            f.write(struct.pack('B', VERSION))
+            f.write(struct.pack('>H', len(key)))
+            f.write(key)
+            f.write(struct.pack('>I', len(metadata_bytes)))
+            f.write(metadata_bytes)
+        
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetFileAttributesW(str(filepath), 2)
+            except:
+                pass
+        
+        return True
+
+    @staticmethod
+    def load_key(filepath: Path) -> Tuple[Optional[bytes], Optional[dict]]:
+        if not filepath.exists():
+            return None, None
+        
+        try:
+            with open(filepath, 'rb') as f:
+                magic = f.read(4)
+                if magic != b'PWKS':
+                    return None, None
+                
+                version = struct.unpack('B', f.read(1))[0]
+                if version != 1:
+                    return None, None
+                
+                key_len = struct.unpack('>H', f.read(2))[0]
+                key = f.read(key_len)
+                
+                metadata_len = struct.unpack('>I', f.read(4))[0]
+                metadata_bytes = f.read(metadata_len)
+                metadata = json.loads(metadata_bytes.decode('utf-8'))
+                
+                return key, metadata
+        except Exception:
+            return None, None
+
+
+class DataEncryption:
+    """数据加密管理器 - 整合四层加密"""
+
+    @staticmethod
+    def _get_key_file() -> Path:
+        """获取密钥文件路径（程序目录）"""
+        # 获取程序所在目录
+        if getattr(sys, 'frozen', False):
+            base_dir = Path(sys.executable).parent
+        else:
+            base_dir = Path(__file__).parent
+        
+        data_dir = base_dir / 'user_system_data'
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / 'pwos_data.key'
+
+    @staticmethod
+    def get_encryption_key() -> bytes:
+        """获取加密密钥（返回 base64 格式）"""
+        from cryptography.fernet import Fernet
+        import base64
+        import hashlib
+        
+        key_file = DataEncryption._get_key_file()
+        
+        if key_file.exists():
+            with open(key_file, 'rb') as f:
+                raw_key = f.read()
+            
+            # 确保是 32 字节原始密钥
+            if len(raw_key) != 32:
+                raw_key = hashlib.sha256(raw_key).digest()
+                with open(key_file, 'wb') as f:
+                    f.write(raw_key)
+            
+            # 返回 base64 格式
+            return base64.urlsafe_b64encode(raw_key)
+        
+        # 首次运行，生成密钥
+        final_key, metadata = QuadLayerEncryption.create_encrypted_key()
+        
+        # 确保是 32 字节
+        if len(final_key) != 32:
+            final_key = hashlib.sha256(final_key).digest()
+        
+        # 保存原始密钥
+        with open(key_file, 'wb') as f:
+            f.write(final_key)
+        
+        # 返回 base64 格式
+        fernet_key = base64.urlsafe_b64encode(final_key)
+        
+        # 保存元数据
+        meta_file = key_file.parent / 'pwos_metadata.json'
+        with open(meta_file, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        return fernet_key
+
+    @staticmethod
+    def encrypt_bytes(data: bytes) -> bytes:
+        """加密字节数据"""
+        from cryptography.fernet import Fernet
+        
+        fernet_key = DataEncryption.get_encryption_key()
+        fernet = Fernet(fernet_key)  # 直接使用，不要再转换
+        return fernet.encrypt(data)
+
+    @staticmethod
+    def decrypt_bytes(encrypted: bytes) -> bytes:
+        """解密字节数据"""
+        from cryptography.fernet import Fernet
+        
+        fernet_key = DataEncryption.get_encryption_key()
+        fernet = Fernet(fernet_key)  # 直接使用，不要再转换
+        return fernet.decrypt(encrypted)
+
+    @staticmethod
+    def encrypt_file(filepath: Path) -> bool:
+        """加密文件"""
+        if not filepath.exists():
+            return False
+        
+        try:
+            with open(filepath, 'rb') as f:
+                data = f.read()
+            
+            encrypted = DataEncryption.encrypt_bytes(data)
+            
+            with open(filepath, 'wb') as f:
+                f.write(encrypted)
+            
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def decrypt_file(filepath: Path) -> Optional[bytes]:
+        """解密文件"""
+        if not filepath.exists():
+            return None
+        
+        try:
+            with open(filepath, 'rb') as f:
+                encrypted = f.read()
+            
+            return DataEncryption.decrypt_bytes(encrypted)
+        except Exception:
+            return None
+
+    @staticmethod
+    def read_json(filepath: Path):
+        """读取加密的 JSON 文件"""
+        decrypted = DataEncryption.decrypt_file(filepath)
+        if decrypted is None:
+            return None
+        return json.loads(decrypted.decode('utf-8'))
+
+    @staticmethod
+    def write_json(filepath: Path, data) -> bool:
+        """写入加密的 JSON 文件"""
+        json_str = json.dumps(data, ensure_ascii=False, indent=2)
+        encrypted = DataEncryption.encrypt_bytes(json_str.encode('utf-8'))
+        
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, 'wb') as f:
+            f.write(encrypted)
+        
+        return True
+
 class DataManagement:
+    
+    # ==================== 路径管理 ====================
+    
+    @staticmethod
+    def _get_encrypted_data_dir() -> Path:
+        """获取加密数据存储目录（直接使用原 user_system_data 目录）"""
+        base_dir = DataManagement._get_base_dir()
+        return base_dir / 'user_system_data'
+
+    @staticmethod
+    def _get_base_dir() -> Path:
+        """程序所在目录"""
+        if getattr(sys, 'frozen', False):
+            return Path(sys.executable).parent
+        return Path(__file__).parent
+
+    
+    # ==================== 初始化 ====================
+    
     @staticmethod
     def init_system() -> bool:
-        """初始化系统"""
+        """初始化系统（加密版，完整功能）"""
         try:
-            os.makedirs(data_dir, exist_ok=True)
-            os.makedirs(backup_dir, exist_ok=True)
-            os.makedirs(update_package_dir, exist_ok=True)
+            # 加密数据目录（C盘）
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            user_files_dir = encrypted_dir / 'user_files'
             
-            if not os.path.exists(occupation_file):
+            encrypted_dir.mkdir(parents=True, exist_ok=True)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            user_files_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 脚本和更新包目录（程序目录明文存储）
+            base_dir = DataManagement._get_base_dir()
+            scripts_dir = base_dir / 'scripts'
+            update_dir = base_dir / 'update_packages'
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+            update_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 检查并迁移旧版数据
+            #DataManagement.migrate_legacy_data()
+            
+            # 初始化职业列表（加密）
+            occupation_file = encrypted_dir / 'occupations.json'
+            if not occupation_file.exists():
                 default_occupations = ["学生", "教师", "工程师", "医生", "护士", "程序员", "设计师", "销售", "经理", "厨师", "司机", "公务员", "农民", "自由职业", "其他"]
-                with open(occupation_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_occupations, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化职业列表")
+                DataEncryption.write_json(occupation_file, default_occupations)
+                SystemLog.log("已初始化职业列表（加密）")
             
-            if not os.path.exists(user_file):
-                initial_data = {"users": {}, "next_id": 1, "empty_ids": []}
-                with open(user_file, 'w', encoding='utf-8') as f:
-                    json.dump(initial_data, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化用户数据库")
-            
-            if not os.path.exists(password_file):
+            # 初始化密码文件（加密）
+            password_file = encrypted_dir / 'secure_passwords.json'
+            if not password_file.exists():
                 DataManagement.save_secure_passwords([])
             
-            if not os.path.exists(version_file):
+            # 初始化版本文件
+            version_file = encrypted_dir / 'version.json'
+            if not version_file.exists():
                 DataManagement.save_version(3, 0)
             
-            if not os.path.exists(firewall_file):
+            # 初始化防火墙配置（加密）
+            firewall_file = encrypted_dir / 'firewall_rules.json'
+            if not firewall_file.exists():
                 default_firewall_rules = {
                     "enable_firewall": False,
                     "block_weak_passwords": True,
@@ -6928,114 +7685,117 @@ class DataManagement:
                     "session_timeout": 1800,
                     "audit_logging": True
                 }
-                with open(firewall_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_firewall_rules, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化防火墙配置")
+                DataEncryption.write_json(firewall_file, default_firewall_rules)
+                SystemLog.log("已初始化防火墙配置（加密）")
             
-            if not os.path.exists(ai_config_file):
+            # 初始化AI配置（加密）
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            if not ai_config_file.exists():
                 default_ai_config = {
                     "enable_ai": False,
                     "providers": {
-                        "deepseek": {
-                            "enabled": False,
-                            "api_key": "",
-                            "api_base": "https://api.deepseek.com",
-                            "model": "deepseek-chat"
-                        },
-                        "aliyun": {
-                            "enabled": False,
-                            "api_key": "",
-                            "api_base": "https://dashscope.aliyuncs.com",
-                            "model": "qwen-max"
-                        }
+                        "deepseek": {"enabled": False, "api_key": "", "api_base": "https://api.deepseek.com", "model": "deepseek-chat"},
+                        "aliyun": {"enabled": False, "api_key": "", "api_base": "https://dashscope.aliyuncs.com", "model": "qwen-max"}
                     },
                     "last_provider": "deepseek",
                     "temperature": 0.7,
                     "max_tokens": 1000
                 }
-                with open(ai_config_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_ai_config, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化AI配置")
+                DataEncryption.write_json(ai_config_file, default_ai_config)
+                SystemLog.log("已初始化AI配置（加密）")
             
-            if not os.path.exists(network_rules_file):
-                default_network_rules = {
-                    "blacklist": [],
-                    "whitelist": [],
-                    "description": "网络防火墙规则"
-                }
-                with open(network_rules_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_network_rules, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化网络规则")
+            # 初始化网络规则（加密）
+            network_rules_file = encrypted_dir / 'network_rules.json'
+            if not network_rules_file.exists():
+                default_network_rules = {"blacklist": [], "whitelist": [], "description": "网络防火墙规则"}
+                DataEncryption.write_json(network_rules_file, default_network_rules)
+                SystemLog.log("已初始化网络规则（加密）")
             
+            # 初始化默认用户文件（加密）
+            default_user_file = user_files_dir / 'default.json'
+            if not default_user_file.exists():
+                initial_data = {"users": {}, "next_id": 1, "empty_ids": []}
+                DataEncryption.write_json(default_user_file, initial_data)
+                SystemLog.log("已初始化默认用户文件（加密）")
+            
+            # 初始化分组系统
             UserGroupManager.init_group_system()
             
+            SystemLog.log("加密系统初始化完成")
             return True
+            
         except Exception as e:
             SystemLog.log(f"初始化系统失败: {str(e)}", "错误")
             return False
-
+    
+    # ==================== 密码管理 ====================
+    
     @staticmethod
     def load_secure_passwords() -> List[Tuple[str, str]]:
-        """加载安全的密码列表"""
+        """加载安全的密码列表（从加密文件）"""
         try:
-            if not os.path.exists(password_file):
-                return []
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            password_file = encrypted_dir / 'secure_passwords.json'
             
-            with open(password_file, 'r', encoding='utf-8') as f:
-                passwords_data = json.load(f)
-            
-            if not passwords_data:
-                return []
-            
-            if isinstance(passwords_data, list) and len(passwords_data) > 0:
-                if isinstance(passwords_data[0], dict) and "salt" in passwords_data[0] and "hash" in passwords_data[0]:
-                    return [(p["salt"], p["hash"]) for p in passwords_data]
-            
+            if password_file.exists():
+                passwords_data = DataEncryption.read_json(password_file)
+                if passwords_data and isinstance(passwords_data, list):
+                    if len(passwords_data) > 0 and isinstance(passwords_data[0], dict):
+                        return [(p["salt"], p["hash"]) for p in passwords_data]
             return []
         except Exception:
             return []
 
     @staticmethod
     def save_secure_passwords(passwords: List[Tuple[str, str]]) -> bool:
-        """保存安全的密码列表"""
+        """保存安全的密码列表（加密存储）"""
         try:
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            password_file = encrypted_dir / 'secure_passwords.json'
             passwords_data = [{"salt": salt, "hash": pwd_hash} for salt, pwd_hash in passwords]
-            
-            with open(password_file, 'w', encoding='utf-8') as f:
-                json.dump(passwords_data, f, ensure_ascii=False, indent=2)
-            return True
+            return DataEncryption.write_json(password_file, passwords_data)
         except Exception:
             return False
 
+    # ==================== 版本管理 ====================
+    
     @staticmethod
     def save_version(major: int, minor: int) -> bool:
-        """保存版本号"""
+        """保存版本号（加密存储）"""
         try:
-            with open(version_file, 'w', encoding='utf-8') as f:
-                json.dump({"major": major, "minor": minor}, f, ensure_ascii=False, indent=2)
-            return True
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            version_file = encrypted_dir / 'version.json'
+            return DataEncryption.write_json(version_file, {"major": major, "minor": minor})
         except Exception:
             return False
 
     @staticmethod
     def load_version() -> str:
-        """加载版本号"""
+        """加载版本号（从加密文件）"""
         try:
-            with open(version_file, 'r', encoding='utf-8') as f:
-                v = json.load(f)
-            return f"{v['major']}.{v['minor']}"
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            version_file = encrypted_dir / 'version.json'
+            if version_file.exists():
+                v = DataEncryption.read_json(version_file)
+                if v:
+                    return f"{v['major']}.{v['minor']}"
+            return "3.0"
         except Exception:
             return "3.0"
 
+    # ==================== 用户数据管理（支持分组系统） ====================
+    
     @staticmethod
     def load_user_data() -> Dict[str, Any]:
-        """加载用户数据（支持分组系统）"""
+        """加载用户数据（从加密文件，支持分组系统）"""
         try:
             current_file = UserGroupManager.get_current_user_file()
             
-            if os.path.exists(current_file):
-                with open(current_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            # current_file 现在是 Path 对象
+            if current_file.exists():
+                data = DataEncryption.read_json(current_file)
+                if data is not None:
+                    return data
             
             return {"users": {}, "next_id": 1, "empty_ids": []}
         except Exception as e:
@@ -7044,10 +7804,10 @@ class DataManagement:
 
     @staticmethod
     def save_user_data(data: Dict[str, Any]) -> bool:
-        """保存用户数据（支持分组系统）"""
+        """保存用户数据（加密存储，支持分组系统）"""
         try:
             current_file = UserGroupManager.get_current_user_file()
-            os.makedirs(os.path.dirname(current_file), exist_ok=True)
+            current_file.parent.mkdir(parents=True, exist_ok=True)
             
             if "metadata" not in data:
                 data["metadata"] = {}
@@ -7056,62 +7816,63 @@ class DataManagement:
             if "users" in data:
                 data["metadata"]["user_count"] = len(data["users"])
             
-            with open(current_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            result = DataEncryption.write_json(current_file, data)
             
-            SystemLog.log(f"保存用户数据到: {os.path.basename(current_file)}", "信息")
-            return True
+            if result:
+                SystemLog.log(f"保存用户数据到: {current_file.name}", "信息")
+            return result
+            
         except Exception as e:
             SystemLog.log(f"保存用户数据失败: {str(e)}", "错误")
             return False
 
+    # ==================== 备份管理（完整版，支持新版/旧版格式） ====================
+    
     @staticmethod
     def create_backup() -> bool:
-        """创建备份（支持分组系统）"""
+        """创建备份（支持分组系统，加密版）"""
         try:
             current_file = UserGroupManager.get_current_user_file()
-            file_name = os.path.basename(current_file)
-            file_base_name = os.path.splitext(file_name)[0]  # 移除扩展名
+            file_name = current_file.name
+            file_base_name = current_file.stem
             
-            if not os.path.exists(current_file):
-                safe_print(f"❌ 用户文件不存在: {current_file}")
+            if not current_file.exists():
+                safe_print(f"❌ 用户文件不存在: {file_name}")
                 return False
             
-            os.makedirs(backup_dir, exist_ok=True)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            backup_dir.mkdir(parents=True, exist_ok=True)
             
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            # 使用实际文件名作为备份文件名
-            backup_file = os.path.join(backup_dir, f"{file_base_name}_{timestamp}.json")
+            # 使用实际文件名作为备份文件名（新版格式）
+            backup_file = backup_dir / f"{file_base_name}_{timestamp}.json"
             
-            with open(current_file, 'r', encoding='utf-8') as src:
-                with open(backup_file, 'w', encoding='utf-8') as dst:
-                    dst.write(src.read())
+            # 备份解密后的数据（明文备份，方便恢复）
+            data = DataManagement.load_user_data()
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
             
             # 清理旧备份（只保留每个文件最新的5个备份）
             backup_files = {}
-            for f in os.listdir(backup_dir):
-                if f.endswith('.json'):
-                    parts = f.rsplit('_', 2)  # 分割格式: filename_YYYYMMDD_HHMMSS.json
-                    if len(parts) >= 2:
-                        file_prefix = '_'.join(parts[:-2]) if len(parts) > 2 else parts[0]
-                        if file_prefix not in backup_files:
-                            backup_files[file_prefix] = []
-                        backup_files[file_prefix].append(f)
+            for f in backup_dir.glob("*.json"):
+                # 解析文件名格式
+                parts = f.stem.rsplit('_', 2)
+                if len(parts) >= 2:
+                    file_prefix = '_'.join(parts[:-2]) if len(parts) > 2 else parts[0]
+                    if file_prefix not in backup_files:
+                        backup_files[file_prefix] = []
+                    backup_files[file_prefix].append(f)
             
             for file_prefix, files in backup_files.items():
                 if len(files) > 5:
-                    files.sort(key=lambda x: os.path.getctime(os.path.join(backup_dir, x)))
+                    files.sort(key=lambda x: x.stat().st_ctime)
                     for old_backup in files[:-5]:
-                        old_backup_path = os.path.join(backup_dir, old_backup)
-                        if os.path.exists(old_backup_path):
-                            try:
-                                os.remove(old_backup_path)
-                                SystemLog.log(f"清理旧备份: {old_backup}", "信息")
-                            except Exception as e:
-                                SystemLog.log(f"删除旧备份失败 {old_backup}: {str(e)}", "警告")
+                        old_backup.unlink()
+                        SystemLog.log(f"清理旧备份: {old_backup.name}", "信息")
             
-            backup_size = os.path.getsize(backup_file)
-            safe_print(f"✅ 备份创建成功: {os.path.basename(backup_file)} ({backup_size} 字节)")
+            backup_size = backup_file.stat().st_size
+            safe_print(f"✅ 备份创建成功: {backup_file.name} ({backup_size} 字节)")
             SystemLog.log(f"已创建备份: {backup_file} ({backup_size} 字节)")
             
             return True
@@ -7124,53 +7885,46 @@ class DataManagement:
     def get_backup_list() -> List[Dict[str, Any]]:
         """获取备份列表（支持分组系统和旧版备份）"""
         try:
-            if not os.path.exists(backup_dir):
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            
+            if not backup_dir.exists():
                 return []
             
             # 获取当前用户文件名
             current_file = UserGroupManager.get_current_user_file()
-            current_file_name = os.path.basename(current_file)
-            file_base_name = os.path.splitext(current_file_name)[0]
+            current_file_name = current_file.name
+            file_base_name = current_file.stem
             
             backup_list = []
-            for f in os.listdir(backup_dir):
-                if f.endswith('.json'):
-                    file_path = os.path.join(backup_dir, f)
-                    
-                    # 检查是否为当前文件的备份
-                    is_current_file_backup = False
-                    backup_type = "其他"
-                    
-                    # 情况1：新格式备份 - default_20241020_143025.json
-                    if f.startswith(file_base_name + '_'):
+            for f in backup_dir.glob("*.json"):
+                # 检查是否为当前文件的备份
+                is_current_file_backup = False
+                backup_type = "其他"
+                
+                # 情况1：新格式备份 - default_20241020_143025.json
+                if f.name.startswith(file_base_name + '_'):
+                    is_current_file_backup = True
+                    backup_type = "新版格式"
+                
+                # 情况2：旧格式备份 - users_20241020_143025.json
+                elif f.name.startswith('users_'):
+                    if current_file_name == 'default.json':
                         is_current_file_backup = True
-                        backup_type = "新版格式"
-                    
-                    # 情况2：旧格式备份 - users_20241020_143025.json
-                    elif f.startswith('users_'):
-                        # 旧版备份 users_*.json 对应 default.json
-                        if current_file_name == 'default.json':
-                            is_current_file_backup = True
-                            backup_type = "旧版格式"
-                        else:
-                            # 对于其他文件，旧版备份可能不适用
-                            backup_type = "旧版通用"
-                    
-                    # 情况3：其他文件备份 - testfile_20241020_143025.json
+                        backup_type = "旧版格式"
                     else:
-                        backup_type = "其他文件"
-                    
-                    backup_info = {
-                        "filename": f,
-                        "is_current_file": is_current_file_backup,
-                        "path": file_path,
-                        "file_size": os.path.getsize(file_path),
-                        "modified_time": os.path.getmtime(file_path),
-                        "backup_type": backup_type
-                    }
-                    backup_list.append(backup_info)
+                        backup_type = "旧版通用"
+                
+                backup_info = {
+                    "filename": f.name,
+                    "is_current_file": is_current_file_backup,
+                    "path": str(f),
+                    "file_size": f.stat().st_size,
+                    "modified_time": f.stat().st_mtime,
+                    "backup_type": backup_type
+                }
+                backup_list.append(backup_info)
             
-            # 按修改时间排序（最新的在前）
             backup_list.sort(key=lambda x: x["modified_time"], reverse=True)
             return backup_list
         except Exception as e:
@@ -7181,29 +7935,31 @@ class DataManagement:
     def restore_backup(backup_filename: str) -> Tuple[bool, str]:
         """恢复备份（支持新旧版本备份）"""
         try:
-            if not os.path.exists(backup_dir):
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            
+            if not backup_dir.exists():
                 return False, "备份目录不存在"
             
-            backup_file_path = os.path.join(backup_dir, backup_filename)
-            if not os.path.exists(backup_file_path):
+            backup_file = backup_dir / backup_filename
+            if not backup_file.exists():
                 return False, "备份文件不存在"
             
             # 加载备份数据
-            backup_data = None
-            with open(backup_file_path, 'r', encoding='utf-8') as src:
-                backup_data = json.load(src)
+            with open(backup_file, 'r', encoding='utf-8') as f:
+                backup_data = json.load(f)
             
             if not backup_data or "users" not in backup_data:
                 return False, "备份文件格式无效"
             
             # 获取当前用户文件路径
             current_file = UserGroupManager.get_current_user_file()
-            current_file_name = os.path.basename(current_file)
+            current_file_name = current_file.name
             
             # 检查是否为旧版备份
             is_old_version = backup_filename.startswith('users_')
             
-            # 如果是旧版备份且当前文件不是default.json，需要提示
+            # 如果是旧版备份且当前文件不是default.json，需要提示并切换
             if is_old_version and current_file_name != 'default.json':
                 safe_print("⚠️  旧版备份(users_*.json)只能恢复到default.json")
                 safe_print(f"   当前文件: {current_file_name}")
@@ -7229,20 +7985,20 @@ class DataManagement:
                     }
                 safe_print("🔄 正在转换旧版备份格式...")
             
-            # 恢复备份到当前用户文件
-            with open(current_file, 'w', encoding='utf-8') as dst:
-                json.dump(backup_data, dst, ensure_ascii=False, indent=2)
+            # 恢复备份到当前用户文件（加密保存）
+            result = DataEncryption.write_json(current_file, backup_data)
             
-            # 验证恢复是否成功
-            restored_data = DataManagement.load_user_data()
-            user_count = len(restored_data.get("users", {}))
-            
-            if is_old_version:
-                SystemLog.log(f"已从旧版备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户，已转换格式)")
-                return True, f"成功从旧版备份恢复数据到 {current_file_name} (恢复用户数: {user_count}，已自动转换格式)"
+            if result:
+                user_count = len(backup_data.get("users", {}))
+                if is_old_version:
+                    SystemLog.log(f"已从旧版备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户，已转换格式)")
+                    return True, f"成功从旧版备份恢复数据到 {current_file_name} (恢复用户数: {user_count}，已自动转换格式)"
+                else:
+                    SystemLog.log(f"已从备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户)")
+                    return True, f"成功从备份恢复数据到 {current_file_name} (恢复用户数: {user_count})"
             else:
-                SystemLog.log(f"已从备份恢复: {backup_filename} 到 {current_file_name} (恢复 {user_count} 个用户)")
-                return True, f"成功从备份恢复数据到 {current_file_name} (恢复用户数: {user_count})"
+                return False, "恢复失败"
+            
         except Exception as e:
             error_info = f"恢复备份失败: {str(e)}"
             SystemLog.log(error_info, "错误")
@@ -7256,7 +8012,7 @@ class DataManagement:
             
             # 获取当前用户文件信息
             current_file = UserGroupManager.get_current_user_file()
-            current_file_name = os.path.basename(current_file)
+            current_file_name = current_file.name
             safe_print(f"当前用户文件: {current_file_name}")
             safe_print("ℹ️  旧版备份(users_*.json)只适用于default.json文件")
             safe_print("-" * 50)
@@ -7277,14 +8033,11 @@ class DataManagement:
                 if backup["is_current_file"]:
                     current_file_backups.append(backup)
                 elif backup["backup_type"] == "旧版通用" and current_file_name == 'default.json':
-                    # 旧版users_备份也可以用于default.json
                     old_version_backups.append(backup)
                 else:
                     other_backups.append(backup)
             
             # 显示可用的备份
-            display_count = 0
-            
             # 显示当前文件的新版备份
             if current_file_backups:
                 safe_print(f"\n=== {current_file_name} 的备份 (新版格式) ===")
@@ -7294,30 +8047,23 @@ class DataManagement:
                     file_time = datetime.datetime.fromtimestamp(backup["modified_time"]).strftime("%Y-%m-%d %H:%M")
                     file_size_kb = backup["file_size"] / 1024
                     safe_print(f"{i:2d}.  | {backup['filename']:<25} | {file_time} | {backup['backup_type']}")
-                    display_count += 1
             
             # 显示旧版备份（仅当当前文件是default.json时）
             if old_version_backups and current_file_name == 'default.json':
-                if not current_file_backups:
-                    safe_print(f"\n=== 旧版备份 (users_*.json) ===")
-                    safe_print("序号 | 备份文件名                | 创建时间        | 类型")
-                    safe_print("-" * 70)
-                    start_index = 1
-                else:
-                    safe_print(f"\n=== 旧版备份 (users_*.json) ===")
-                    start_index = len(current_file_backups) + 1
-                
+                start_index = len(current_file_backups) + 1
+                safe_print(f"\n=== 旧版备份 (users_*.json) ===")
+                safe_print("序号 | 备份文件名                | 创建时间        | 类型")
+                safe_print("-" * 70)
                 for i, backup in enumerate(old_version_backups, start_index):
                     file_time = datetime.datetime.fromtimestamp(backup["modified_time"]).strftime("%Y-%m-%d %H:%M")
                     file_size_kb = backup["file_size"] / 1024
                     safe_print(f"{i:2d}.  | {backup['filename']:<25} | {file_time} | {backup['backup_type']}")
-                    display_count += 1
             
             if other_backups:
                 safe_print(f"\n=== 其他文件的备份 ===")
-                for backup in other_backups[:3]:  # 只显示前3个
+                for backup in other_backups[:3]:
                     file_time = datetime.datetime.fromtimestamp(backup["modified_time"]).strftime("%Y-%m-%d %H:%M")
-                    safe_print(f"  • {backup['filename']} - {file_time} ({backup['backup_type']})")
+                    safe_print(f"  • {backup['filename']} - {file_time}")
                 if len(other_backups) > 3:
                     safe_print(f"  还有 {len(other_backups) - 3} 个其他备份...")
             
@@ -7327,8 +8073,8 @@ class DataManagement:
                     safe_print("💡 提示：旧版备份(users_*.json)只适用于default.json文件")
                 return
             
+            total_options = len(current_file_backups) + len(old_version_backups)
             while True:
-                total_options = len(current_file_backups) + len(old_version_backups)
                 selection = input(f"\n请选择要恢复的备份编号(1-{total_options})或输入0取消: ").strip()
                 if selection == "0":
                     safe_print("恢复操作已取消")
@@ -7337,7 +8083,6 @@ class DataManagement:
                 if selection.isdigit():
                     num = int(selection)
                     if 1 <= num <= total_options:
-                        # 确定选择的是哪个备份
                         if num <= len(current_file_backups):
                             selected_backup = current_file_backups[num - 1]
                         else:
@@ -7360,8 +8105,7 @@ class DataManagement:
                             backup_user_count = len(backup_data.get("users", {}))
                             safe_print(f"   备份用户数: {backup_user_count}")
                             
-                            # 检查是否为旧版备份
-                            if selected_backup['backup_type'] == "旧版格式" or selected_backup['backup_type'] == "旧版通用":
+                            if selected_backup['backup_type'] in ["旧版格式", "旧版通用"]:
                                 safe_print("   ⚠️  这是旧版格式备份")
                                 safe_print("   💡 系统将自动转换格式")
                         except:
@@ -7373,8 +8117,6 @@ class DataManagement:
                             if success:
                                 safe_print(f"✅ {message}")
                                 time.sleep(1)
-                                safe_print("\n恢复后系统信息:")
-                                # 显示恢复后的数据
                                 restored_data = DataManagement.load_user_data()
                                 user_count = len(restored_data.get("users", {}))
                                 safe_print(f"✅ 恢复成功！当前用户数: {user_count}")
@@ -7393,13 +8135,18 @@ class DataManagement:
             safe_print(f"❌ 数据恢复过程中发生错误: {str(e)}")
             SystemLog.log(f"数据恢复失败: {str(e)}", "错误")
 
+    # ==================== 配置管理 ====================
+    
     @staticmethod
     def load_occupation_list() -> List[str]:
-        """加载职业列表"""
+        """加载职业列表（从加密文件）"""
         try:
-            if os.path.exists(occupation_file):
-                with open(occupation_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            occupation_file = encrypted_dir / 'occupations.json'
+            if occupation_file.exists():
+                data = DataEncryption.read_json(occupation_file)
+                if data:
+                    return data
             return []
         except Exception as e:
             SystemLog.log(f"加载职业列表失败: {str(e)}", "错误")
@@ -7407,11 +8154,14 @@ class DataManagement:
 
     @staticmethod
     def load_firewall_config() -> Dict[str, Any]:
-        """加载防火墙配置"""
+        """加载防火墙配置（从加密文件）"""
         try:
-            if os.path.exists(firewall_file):
-                with open(firewall_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            firewall_file = encrypted_dir / 'firewall_rules.json'
+            if firewall_file.exists():
+                data = DataEncryption.read_json(firewall_file)
+                if data:
+                    return data
             return {}
         except Exception as e:
             SystemLog.log(f"加载防火墙配置失败: {str(e)}", "错误")
@@ -7419,11 +8169,14 @@ class DataManagement:
 
     @staticmethod
     def load_network_rules() -> Dict[str, Any]:
-        """加载网络规则"""
+        """加载网络规则（从加密文件）"""
         try:
-            if os.path.exists(network_rules_file):
-                with open(network_rules_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            network_rules_file = encrypted_dir / 'network_rules.json'
+            if network_rules_file.exists():
+                data = DataEncryption.read_json(network_rules_file)
+                if data:
+                    return data
             return {"blacklist": [], "whitelist": [], "description": "网络防火墙规则"}
         except Exception as e:
             SystemLog.log(f"加载网络规则失败: {str(e)}", "错误")
@@ -7431,20 +8184,50 @@ class DataManagement:
 
     @staticmethod
     def save_network_rules(rules: Dict[str, Any]) -> bool:
-        """保存网络规则"""
+        """保存网络规则（加密存储）"""
         try:
-            with open(network_rules_file, 'w', encoding='utf-8') as f:
-                json.dump(rules, f, ensure_ascii=False, indent=2)
-            return True
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            network_rules_file = encrypted_dir / 'network_rules.json'
+            return DataEncryption.write_json(network_rules_file, rules)
         except Exception as e:
             SystemLog.log(f"保存网络规则失败: {str(e)}", "错误")
             return False
 
     @staticmethod
+    def load_ai_config() -> Optional[Dict[str, Any]]:
+        """加载AI配置（从加密文件）"""
+        try:
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            if ai_config_file.exists():
+                return DataEncryption.read_json(ai_config_file)
+            return None
+        except Exception as e:
+            SystemLog.log(f"加载AI配置失败: {str(e)}", "错误")
+            return None
+
+    @staticmethod
+    def save_ai_config(config: Dict[str, Any]) -> bool:
+        """保存AI配置（加密存储）"""
+        try:
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            return DataEncryption.write_json(ai_config_file, config)
+        except Exception as e:
+            SystemLog.log(f"保存AI配置失败: {str(e)}", "错误")
+            return False
+
+    # ==================== 增强备份 ====================
+    
+    @staticmethod
     def enhanced_backup() -> Tuple[bool, str]:
         """增强的备份功能"""
         try:
             safe_print("\n📦 正在创建增强备份...")
+            
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            backup_dir = encrypted_dir / 'backups'
+            backup_dir.mkdir(parents=True, exist_ok=True)
             
             # 1. 备份用户数据
             backup_success = DataManagement.create_backup()
@@ -7454,20 +8237,32 @@ class DataManagement:
             # 2. 备份系统文件
             current_file = sys.argv[0] if sys.argv else __file__
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            system_backup_file = os.path.join(backup_dir, f"system_{timestamp}.py")
+            system_backup_file = backup_dir / f"system_{timestamp}.py"
             shutil.copy2(current_file, system_backup_file)
             
             # 3. 备份配置文件
-            config_files = [occupation_file, firewall_file, network_rules_file, ai_config_file]
-            config_backup_dir = os.path.join(backup_dir, f"config_{timestamp}")
-            os.makedirs(config_backup_dir, exist_ok=True)
+            config_files = [
+                encrypted_dir / 'occupations.json',
+                encrypted_dir / 'firewall_rules.json',
+                encrypted_dir / 'network_rules.json',
+                encrypted_dir / 'ai_config.json'
+            ]
+            config_backup_dir = backup_dir / f"config_{timestamp}"
+            config_backup_dir.mkdir(parents=True, exist_ok=True)
             
             for config_file in config_files:
-                if os.path.exists(config_file):
-                    shutil.copy2(config_file, os.path.join(config_backup_dir, os.path.basename(config_file)))
+                if config_file.exists():
+                    shutil.copy2(config_file, config_backup_dir / config_file.name)
             
-            # 4. 创建备份报告
-            report_file = os.path.join(backup_dir, f"backup_report_{timestamp}.txt")
+            # 4. 备份用户文件目录
+            user_files_dir = encrypted_dir / 'user_files'
+            if user_files_dir.exists():
+                user_files_backup_dir = backup_dir / f"user_files_{timestamp}"
+                shutil.copytree(user_files_dir, user_files_backup_dir)
+                safe_print(f"  ✅ 已备份用户文件目录")
+            
+            # 5. 创建备份报告
+            report_file = backup_dir / f"backup_report_{timestamp}.txt"
             with open(report_file, 'w', encoding='utf-8') as f:
                 f.write(f"PWOS3 系统备份报告\n")
                 f.write(f"备份时间: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -7475,6 +8270,7 @@ class DataManagement:
                 f.write(f"备份文件:\n")
                 f.write(f"  • 系统文件: {system_backup_file}\n")
                 f.write(f"  • 配置文件: {config_backup_dir}/\n")
+                f.write(f"  • 用户文件: {user_files_backup_dir}/ (如果有)\n")
                 f.write(f"  • 用户数据: 已备份到备份目录\n")
             
             safe_print("✅ 增强备份创建完成")
@@ -8334,7 +9130,11 @@ class NetworkFirewall:
     def init() -> bool:
         """初始化网络防火墙"""
         try:
-            if not os.path.exists(firewall_file):
+            # 改用加密目录的路径
+            data_dir = DataManagement._get_encrypted_data_dir()
+            firewall_file = data_dir / 'firewall_rules.json'
+            
+            if not firewall_file.exists():
                 return False
             
             config = DataManagement.load_firewall_config()
@@ -8345,6 +9145,7 @@ class NetworkFirewall:
         except Exception as e:
             SystemLog.log(f"初始化网络防火墙失败: {str(e)}", "错误")
             return False
+
 
     @staticmethod
     def check_network_connection(host: str, port: str) -> bool:
@@ -11755,9 +12556,18 @@ class AIAssistant:
                 
     @staticmethod
     def init() -> bool:
-        """初始化AI助手"""
+        """初始化AI助手（使用加密目录）"""
+        old_config = Path(DataManagement._get_base_dir() / 'ai_config.json')
+        if old_config.exists():
+            old_config.unlink()
+            safe_print("✅ 已删除旧版明文AI配置")
+
         try:
-            if not os.path.exists(ai_config_file):
+            # 使用加密目录（就是原 user_system_data）
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            
+            if not ai_config_file.exists():
                 default_config = {
                     "enable_ai": False,
                     "providers": {
@@ -11778,9 +12588,14 @@ class AIAssistant:
                     "max_tokens": 1000,
                     "max_history": 20
                 }
-                with open(ai_config_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_config, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化AI助手配置")
+                DataEncryption.write_json(ai_config_file, default_config)
+                SystemLog.log("已初始化AI助手配置（加密）")
+            
+            # 清理旧版明文的 AI 配置文件（如果存在）
+            old_config = DataManagement._get_base_dir() / 'ai_config.json'
+            if old_config.exists():
+                old_config.unlink()
+                safe_print("✅ 已清理旧版明文AI配置")
             
             # 清理旧版本可能存在的last_provider字段
             config = AIAssistant.load_config()
@@ -11796,26 +12611,13 @@ class AIAssistant:
 
     @staticmethod
     def load_config() -> Optional[Dict[str, Any]]:
-        """加载配置"""
-        try:
-            if os.path.exists(ai_config_file):
-                with open(ai_config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            return None
-        except Exception as e:
-            SystemLog.log(f"加载AI助手配置失败: {str(e)}", "错误")
-            return None
+        """加载AI配置（从加密文件）"""
+        return DataManagement.load_ai_config()
 
     @staticmethod
     def save_config(config: Dict[str, Any]) -> bool:
-        """保存配置"""
-        try:
-            with open(ai_config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception as e:
-            SystemLog.log(f"保存AI助手配置失败: {str(e)}", "错误")
-            return False
+        """保存AI配置（加密存储）"""
+        return DataManagement.save_ai_config(config)
 
     @staticmethod
     def get_available_provider(config: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
@@ -15180,9 +15982,17 @@ class AIAssistant:
                 
     @staticmethod
     def init() -> bool:
-        """初始化AI助手"""
+        """初始化AI助手（使用加密目录）"""
+        old_config = Path(DataManagement._get_base_dir() / 'ai_config.json')
+        if old_config.exists():
+            old_config.unlink()
+            safe_print("✅ 已删除旧版明文AI配置")
         try:
-            if not os.path.exists(ai_config_file):
+            # 使用加密目录（就是原 user_system_data）
+            encrypted_dir = DataManagement._get_encrypted_data_dir()
+            ai_config_file = encrypted_dir / 'ai_config.json'
+            
+            if not ai_config_file.exists():
                 default_config = {
                     "enable_ai": False,
                     "providers": {
@@ -15203,9 +16013,14 @@ class AIAssistant:
                     "max_tokens": 1000,
                     "max_history": 20
                 }
-                with open(ai_config_file, 'w', encoding='utf-8') as f:
-                    json.dump(default_config, f, ensure_ascii=False, indent=2)
-                SystemLog.log("已初始化AI助手配置")
+                DataEncryption.write_json(ai_config_file, default_config)
+                SystemLog.log("已初始化AI助手配置（加密）")
+            
+            # 清理旧版明文的 AI 配置文件（如果存在）
+            old_config = DataManagement._get_base_dir() / 'ai_config.json'
+            if old_config.exists():
+                old_config.unlink()
+                safe_print("✅ 已清理旧版明文AI配置")
             
             # 清理旧版本可能存在的last_provider字段
             config = AIAssistant.load_config()
@@ -15219,28 +16034,17 @@ class AIAssistant:
             SystemLog.log(f"初始化AI助手失败: {str(e)}", "错误")
             return False
 
+
     @staticmethod
     def load_config() -> Optional[Dict[str, Any]]:
-        """加载配置"""
-        try:
-            if os.path.exists(ai_config_file):
-                with open(ai_config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            return None
-        except Exception as e:
-            SystemLog.log(f"加载AI助手配置失败: {str(e)}", "错误")
-            return None
+        """加载AI配置（从加密文件）"""
+        return DataManagement.load_ai_config()
 
     @staticmethod
     def save_config(config: Dict[str, Any]) -> bool:
-        """保存配置"""
-        try:
-            with open(ai_config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-            return True
-        except Exception as e:
-            SystemLog.log(f"保存AI助手配置失败: {str(e)}", "错误")
-            return False
+        """保存AI配置（加密存储）"""
+        return DataManagement.save_ai_config(config)
+
 
     @staticmethod
     def get_available_provider(config: Dict[str, Any]) -> Tuple[Optional[str], List[str]]:
