@@ -1979,7 +1979,7 @@ class Utils:
         return a / b if b != 0 else default
     
     @staticmethod
-    def chunk_list(data: List, size: int) -> List[List]:
+    def chunk_list(data: List, size: int) -> list:
         return [data[i:i+size] for i in range(0, len(data), size)]
     
     @staticmethod
