@@ -1,4 +1,3 @@
-```markdown
 # ⚡ PWOS3 - Python 一体化学习平台
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue)
