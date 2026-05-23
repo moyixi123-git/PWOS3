@@ -1,5 +1,5 @@
 # ==================== std_lib.py - PWOS3 超级增强标准库 ====================
-# 版本: 2.0 - 超级增强版
+# 版本: 3.1 - 修复版
 
 import os, sys, json, time, random, hashlib, datetime, shutil, zipfile, tarfile
 import re, base64, csv, sqlite3, subprocess, socket, platform, math, textwrap
@@ -12,6 +12,7 @@ from collections import OrderedDict, defaultdict, Counter, deque, namedtuple
 from functools import wraps, partial, reduce, lru_cache
 from contextlib import contextmanager
 import traceback
+import uuid as _uuid
 
 # ==================== 1. 基础类型增强 ====================
 
@@ -442,6 +443,8 @@ class Map:
         return list(self._dict.keys())
     def values(self) -> list:
         return list(self._dict.values())
+    def items(self):
+        return list(self._dict.items())
     def __getitem__(self, key):
         return self._dict[key]
     def __setitem__(self, key, value):
@@ -573,12 +576,16 @@ class Tuple:
 
 class Algo:
     @staticmethod
-    def sort(data, reverse=False):
+    def sort(data, reverse=False, key=None):
+        """排序，支持 key 参数"""
+        if key is not None:
+            return sorted(data, key=key, reverse=reverse)
         return sorted(data, reverse=reverse)
     
     @staticmethod
-    def stable_sort(data, key=None):
-        return sorted(data, key=key)
+    def stable_sort(data, key=None, reverse=False):
+        """稳定排序"""
+        return sorted(data, key=key, reverse=reverse)
     
     @staticmethod
     def partial_sort(data, n, key=None):
@@ -750,10 +757,9 @@ class Algo:
         false_list = [x for x in data if not predicate(x)]
         return true_list, false_list
 
-# ==================== 4. 新增：Range 类 ====================
+# ==================== 4. Range 类 ====================
 
 class Range:
-    """范围迭代器，支持多种用法"""
     def __init__(self, start, end=None, step=1):
         if end is None:
             self._start = 0
@@ -789,7 +795,6 @@ class Range:
         return f"Range({self._start}, {self._end}, {self._step})"
 
 class Range2D:
-    """二维范围"""
     def __init__(self, x_start, x_end, y_start, y_end, x_step=1, y_step=1):
         self.x_range = Range(x_start, x_end, x_step)
         self.y_range = Range(y_start, y_end, y_step)
@@ -800,7 +805,7 @@ class Range2D:
             for y in self.y_range:
                 yield x, y
 
-# ==================== 5. 新增：JSON 增强类 ====================
+# ==================== 5. JSON 增强 ====================
 
 class JSON:
     @staticmethod
@@ -822,12 +827,12 @@ class JSON:
     def pretty_print(obj):
         print(json.dumps(obj, ensure_ascii=False, indent=2))
 
-# ==================== 6. 新增：HTTP 客户端增强 ====================
+# ==================== 6. HTTP 客户端 ====================
 
 class HTTP:
     @staticmethod
     def get(url, headers=None, timeout=30):
-        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/2.0'})
+        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/3.0'})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode('utf-8')
     @staticmethod
@@ -847,7 +852,7 @@ class HTTP:
         urllib.request.urlretrieve(url, save_path)
         return True
 
-# ==================== 7. 新增：加密工具增强 ====================
+# ==================== 7. 加密工具 ====================
 
 class Crypto:
     @staticmethod
@@ -872,10 +877,9 @@ class Crypto:
     def random_string(length=8):
         return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
 
-# ==================== 8. 新增：表格美化类 ====================
+# ==================== 8. 表格美化 ====================
 
 class Table:
-    """简单的表格美化器"""
     def __init__(self, headers=None):
         self.headers = headers or []
         self.rows = []
@@ -888,7 +892,6 @@ class Table:
     def print(self):
         if not self.headers and not self.rows:
             return
-        # 计算列宽
         col_widths = []
         if self.headers:
             col_widths = [len(str(h)) for h in self.headers]
@@ -897,15 +900,12 @@ class Table:
                 if i >= len(col_widths):
                     col_widths.append(0)
                 col_widths[i] = max(col_widths[i], len(str(cell)))
-        # 构建分隔线
         separator = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
-        # 打印表头
         if self.headers:
             print(separator)
             header_line = "| " + " | ".join(str(h).ljust(w) for h, w in zip(self.headers, col_widths)) + " |"
             print(header_line)
         print(separator)
-        # 打印数据行
         for row in self.rows:
             line = "| " + " | ".join(str(cell).ljust(w) for cell, w in zip(row, col_widths)) + " |"
             print(line)
@@ -918,10 +918,9 @@ class Table:
         sys.stdout = old_stdout
         return output.getvalue()
 
-# ==================== 9. 新增：进度条类 ====================
+# ==================== 9. 进度条 ====================
 
 class ProgressBar:
-    """终端进度条"""
     def __init__(self, total, width=50, prefix="Progress", suffix="Complete", color=True):
         self.total = total
         self.width = width
@@ -936,21 +935,20 @@ class ProgressBar:
         bar = "█" * filled + "░" * (self.width - filled)
         if self.color:
             if percent < 0.5:
-                bar = f"\033[93m{bar}\033[0m"  # 黄色
+                bar = f"\033[93m{bar}\033[0m"
             elif percent < 0.8:
-                bar = f"\033[96m{bar}\033[0m"  # 青色
+                bar = f"\033[96m{bar}\033[0m"
             else:
-                bar = f"\033[92m{bar}\033[0m"  # 绿色
+                bar = f"\033[92m{bar}\033[0m"
         print(f"\r{self.prefix}: |{bar}| {self.current}/{self.total} {self.suffix}", end="", flush=True)
         if self.current >= self.total:
             print()
     def reset(self):
         self.current = 0
 
-# ==================== 10. 新增：配置管理类 ====================
+# ==================== 10. 配置管理 ====================
 
 class Config:
-    """简单的配置管理器"""
     def __init__(self, filepath=None):
         self.filepath = filepath
         self._config = {}
@@ -993,10 +991,9 @@ class Config:
     def all(self):
         return self._config.copy()
 
-# ==================== 11. 新增：日志工具 ====================
+# ==================== 11. 日志工具 ====================
 
 class Logger:
-    """简单日志工具"""
     LEVELS = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3}
     def __init__(self, name="app", level="INFO", color=True):
         self.name = name
@@ -1010,15 +1007,15 @@ class Logger:
                 log_msg = color_func(log_msg)
             print(log_msg)
     def debug(self, msg):
-        self._log("DEBUG", msg, lambda x: f"\033[90m{x}\033[0m")  # 灰色
+        self._log("DEBUG", msg, lambda x: f"\033[90m{x}\033[0m")
     def info(self, msg):
-        self._log("INFO", msg, lambda x: f"\033[92m{x}\033[0m")   # 绿色
+        self._log("INFO", msg, lambda x: f"\033[92m{x}\033[0m")
     def warn(self, msg):
-        self._log("WARN", msg, lambda x: f"\033[93m{x}\033[0m")   # 黄色
+        self._log("WARN", msg, lambda x: f"\033[93m{x}\033[0m")
     def error(self, msg):
-        self._log("ERROR", msg, lambda x: f"\033[91m{x}\033[0m")  # 红色
+        self._log("ERROR", msg, lambda x: f"\033[91m{x}\033[0m")
 
-# ==================== 12. 系统工具类 ====================
+# ==================== 12. 系统工具 ====================
 
 class Memory:
     @staticmethod
@@ -1438,7 +1435,7 @@ class Promise:
         future = concurrent.futures.Future()
         for i, p in enumerate(promises):
             p.then(lambda r, i=i: handler(i, r), future.set_exception)
-        return Promise(lambda res, rej: None)  # Simplified
+        return Promise(lambda res, rej: None)
 
 class Iterator:
     def __init__(self, data):
@@ -1611,7 +1608,7 @@ class File:
             result.append((root, dirs, files))
         return result
 
-# ==================== 14. 字符串工具类（增强） ====================
+# ==================== 14. 字符串工具类 ====================
 
 class String:
     @staticmethod
@@ -1659,13 +1656,13 @@ class String:
         pattern = r'^1[3-9]\d{9}$'
         return re.match(pattern, s) is not None
 
-# ==================== 15. 网络工具类（增强） ====================
+# ==================== 15. 网络工具类 ====================
 
 class Network:
     @staticmethod
     def get(url, timeout=30):
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/2.0'})
+            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/3.0'})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode('utf-8')
         except:
@@ -1710,7 +1707,7 @@ class Network:
                 ips.append(ip)
         return ips
 
-# ==================== 16. 数学工具类（增强） ====================
+# ==================== 16. 数学工具类 ====================
 
 class MathUtil:
     @staticmethod
@@ -1767,7 +1764,7 @@ class MathUtil:
                 return False
         return True
 
-# ==================== 17. 时间日期工具类（增强） ====================
+# ==================== 17. 时间日期工具类 ====================
 
 class TimeDate:
     @staticmethod
@@ -1791,7 +1788,7 @@ class TimeDate:
         dt = datetime.datetime.strptime(date_str, fmt)
         return (dt + datetime.timedelta(days=days)).strftime(fmt)
 
-# ==================== 18. 随机工具类（增强） ====================
+# ==================== 18. 随机工具类 ====================
 
 class RandomUtil:
     @staticmethod
@@ -1818,11 +1815,14 @@ class RandomUtil:
     def color():
         colors = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan']
         return random.choice(colors)
+    @staticmethod
+    def uuid():
+        """生成 UUID"""
+        return str(_uuid.uuid4())
 
-# ==================== 19. 颜色工具类（增强） ====================
+# ==================== 19. 颜色工具类 ====================
 
 class Color:
-    # 基本颜色
     @staticmethod
     def red(text):
         return f"\033[91m{text}\033[0m"
@@ -1847,8 +1847,6 @@ class Color:
     @staticmethod
     def black(text):
         return f"\033[90m{text}\033[0m"
-    
-    # 背景色
     @staticmethod
     def bg_red(text):
         return f"\033[101m{text}\033[0m"
@@ -1864,8 +1862,6 @@ class Color:
     @staticmethod
     def bg_cyan(text):
         return f"\033[106m{text}\033[0m"
-    
-    # 样式
     @staticmethod
     def bold(text):
         return f"\033[1m{text}\033[0m"
@@ -1881,8 +1877,6 @@ class Color:
     @staticmethod
     def blink(text):
         return f"\033[5m{text}\033[0m"
-    
-    # 组合样式
     @staticmethod
     def error(text):
         return f"\033[91;1m[ERROR] {text}\033[0m"
@@ -1896,7 +1890,114 @@ class Color:
     def info(text):
         return f"\033[96;1m[INFO] {text}\033[0m"
 
-# ==================== StdLib 统一实例（超级增强版） ====================
+# ==================== 20. 系统信息类 ====================
+
+class SystemInfo:
+    """系统信息类"""
+    
+    @staticmethod
+    def info() -> Dict[str, str]:
+        """获取完整系统信息"""
+        return {
+            'system': platform.system(),
+            'node': platform.node(),
+            'release': platform.release(),
+            'version': platform.version(),
+            'machine': platform.machine(),
+            'processor': platform.processor(),
+            'python': sys.version,
+            'python_version': sys.version.split()[0]
+        }
+    
+    @staticmethod
+    def name() -> str:
+        return platform.system()
+    
+    @staticmethod
+    def version() -> str:
+        return platform.version()
+    
+    @staticmethod
+    def machine() -> str:
+        return platform.machine()
+    
+    @staticmethod
+    def processor() -> str:
+        return platform.processor()
+    
+    @staticmethod
+    def hostname() -> str:
+        return platform.node()
+    
+    @staticmethod
+    def is_windows() -> bool:
+        return platform.system() == "Windows"
+    
+    @staticmethod
+    def is_linux() -> bool:
+        return platform.system() == "Linux"
+    
+    @staticmethod
+    def is_macos() -> bool:
+        return platform.system() == "Darwin"
+
+# ==================== 21. 实用工具类 ====================
+
+class Utils:
+    """实用工具集"""
+    
+    @staticmethod
+    def wait(seconds: float):
+        time.sleep(seconds)
+    
+    @staticmethod
+    def clear_screen():
+        os.system('cls' if platform.system() == 'Windows' else 'clear')
+    
+    @staticmethod
+    def get_input(prompt: str, default: str = "") -> str:
+        result = input(prompt).strip()
+        return result if result else default
+    
+    @staticmethod
+    def confirm(prompt: str, default: bool = False) -> bool:
+        default_text = "Y/n" if default else "y/N"
+        result = input(f"{prompt} ({default_text}): ").strip().lower()
+        if not result:
+            return default
+        return result in ['y', 'yes', '是', '确认']
+    
+    @staticmethod
+    def progress_bar(current: int, total: int, width: int = 50, prefix: str = "") -> str:
+        percent = current / total
+        filled = int(width * percent)
+        bar = "█" * filled + "░" * (width - filled)
+        return f"{prefix}[{bar}] {percent*100:.1f}% ({current}/{total})"
+    
+    @staticmethod
+    def safe_divide(a: float, b: float, default: float = 0) -> float:
+        return a / b if b != 0 else default
+    
+    @staticmethod
+    def chunk_list(data: List, size: int) -> List[List]:
+        return [data[i:i+size] for i in range(0, len(data), size)]
+    
+    @staticmethod
+    def flatten(lst: List) -> List:
+        result = []
+        for item in lst:
+            if isinstance(item, list):
+                result.extend(Utils.flatten(item))
+            else:
+                result.append(item)
+        return result
+    
+    @staticmethod
+    def unique_preserve_order(lst: List) -> List:
+        seen = set()
+        return [x for x in lst if not (x in seen or seen.add(x))]
+
+# ==================== StdLib 统一实例 ====================
 
 class StdLib:
     def __init__(self):
@@ -1923,7 +2024,7 @@ class StdLib:
         self.string_view = StringView
         self.span = Span
         
-        # 新增
+        # 范围
         self.range = Range
         self.range2d = Range2D
         
@@ -1974,7 +2075,7 @@ class StdLib:
         self.enumerable = Enumerable
         self.promise = Promise
         
-        # 新增强大工具
+        # 工具类
         self.file = File()
         self.string = String()
         self.network = Network()
@@ -1991,6 +2092,11 @@ class StdLib:
         self.progress = ProgressBar
         self.config = Config
         self.logger = Logger
+        
+        # 实用模块
+        self.system = SystemInfo()
+        self.utils = Utils()
+        self.sys = SystemInfo()
 
 # 创建全局实例
 std = StdLib()
