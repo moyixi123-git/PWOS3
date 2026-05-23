@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.8+-blue)
 ![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Linux%20%7C%20macOS-green)
 ![许可证](https://img.shields.io/badge/许可证-MIT-yellow)
-![版本](https://img.shields.io/badge/版本-v3.1-red)
+![版本](https://img.shields.io/badge/版本-v3.0-red)
 
 > 开源跨平台 Python 一体化学习平台，纯命令行界面，轻量高效
 
