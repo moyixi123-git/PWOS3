@@ -60,7 +60,6 @@ PWOS3 是一个开源的 Python 一体化学习平台。它运行在纯命令行
 
 ```bash
 git clone https://github.com/moyixi123-git/PWOS3.git
-cd PWOS3
 python PWOS3.py
 ```
 
@@ -81,7 +80,7 @@ python PWOS3.py
 
 ## 📖 PWOS 脚本编写教程
 
-脚本文件以 .pwos 为后缀，放置在 `scripts/` 目录下，系统会自动加载并显示在主菜单中。
+脚本文件以 .pwos 为后缀，放置在 scripts/ 目录下，系统会自动加载并显示在主菜单中。
 
 ### 基本语法
 
@@ -372,7 +371,6 @@ No Python or dependencies required. Some features need internet connection.
 
 ```bash
 git clone https://github.com/moyixi123-git/PWOS3.git
-cd PWOS3
 python PWOS3.py
 ```
 
