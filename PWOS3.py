@@ -1,3 +1,17 @@
+# PWOS3 - Python WOW Operating System
+# Copyright (c) 2024-2026 moyixi123-git
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 # pwos3_complete_fixed.py
 import os
 import json
@@ -16,6 +30,24 @@ import ctypes
 from typing import Optional, Tuple, List, Dict, Any
 import secrets
 from pathlib import Path
+
+# ==================== 跨平台支持 ====================
+class PlatformPath:
+    @staticmethod
+    def get_data_dir(app_name: str = "PWOS3") -> Path:
+        import platform
+        import os
+        from pathlib import Path
+        system = platform.system()
+        if system == "Windows":
+            base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
+        elif system == "Darwin":
+            base = Path.home() / 'Library' / 'Application Support'
+        else:
+            base = Path.home() / '.local' / 'share'
+        data_dir = base / app_name
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir
 import base64
 import struct
 from typing import Optional
@@ -1932,11 +1964,7 @@ class DataManagement:
     # ==================== 路径管理 ====================
     @staticmethod
     def _get_encrypted_data_dir() -> Path:
-        """获取加密数据存储目录（直接使用原 user_system_data 目录）"""
-        base_dir = DataManagement._get_base_dir()
-        return base_dir / 'user_system_data'
-
-
+        return PlatformPath.get_data_dir("PWOS3")
     @staticmethod
     def _get_base_dir() -> Path:
         """程序所在目录"""
@@ -4516,12 +4544,10 @@ class SystemFunctions:
                 try:
                     if file_path == user_file:
                         default_data = {"users": {}, "next_id": 1, "empty_ids": []}
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_data, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_data)
                     elif file_path == occupation_file:
                         default_occupations = ["学生", "教师", "工程师", "医生", "护士", "程序员", "设计师", "销售", "经理", "厨师", "司机", "公务员", "农民", "自由职业", "其他"]
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_occupations, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_occupations)
                     elif file_path == password_file:
                         DataManagement.save_secure_passwords([])
                     elif file_path == version_file:
@@ -4534,17 +4560,27 @@ class SystemFunctions:
                             "session_timeout": 1800,
                             "audit_logging": True
                         }
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_firewall_rules, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_firewall_rules)
                     elif file_path == network_rules_file:
                         default_network_rules = {
                             "blacklist": [],
                             "whitelist": [],
                             "description": "网络防火墙规则"
                         }
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_network_rules, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_network_rules)
+                    elif file_path == ai_config_file:
+                        default_ai_config = {
+                            "enable_ai": False,
+                            "providers": {
+                                "deepseek": {"enabled": False, "api_key": "", "api_base": "https://api.deepseek.com", "model": "deepseek-chat"},
+                                "aliyun": {"enabled": False, "api_key": "", "api_base": "https://dashscope.aliyuncs.com", "model": "qwen-max"}
+                            },
+                            "temperature": 0.7,
+                            "max_tokens": 1000
+                        }
+                        DataEncryption.write_json(Path(file_path), default_ai_config)
                     else:
+                        # 其他文件：创建空文件（明文，非敏感数据）
                         with open(file_path, 'w', encoding='utf-8') as f:
                             f.write("")
                     safe_print(f"✅ 已创建文件: {file_path}")
@@ -7949,10 +7985,7 @@ class DataManagement:
     
     @staticmethod
     def _get_encrypted_data_dir() -> Path:
-        """获取加密数据存储目录（直接使用原 user_system_data 目录）"""
-        base_dir = DataManagement._get_base_dir()
-        return base_dir / 'user_system_data'
-
+        return PlatformPath.get_data_dir("PWOS3")
     @staticmethod
     def _get_base_dir() -> Path:
         """程序所在目录"""
@@ -10532,12 +10565,10 @@ class SystemFunctions:
                 try:
                     if file_path == user_file:
                         default_data = {"users": {}, "next_id": 1, "empty_ids": []}
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_data, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_data)
                     elif file_path == occupation_file:
                         default_occupations = ["学生", "教师", "工程师", "医生", "护士", "程序员", "设计师", "销售", "经理", "厨师", "司机", "公务员", "农民", "自由职业", "其他"]
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_occupations, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_occupations)
                     elif file_path == password_file:
                         DataManagement.save_secure_passwords([])
                     elif file_path == version_file:
@@ -10550,17 +10581,27 @@ class SystemFunctions:
                             "session_timeout": 1800,
                             "audit_logging": True
                         }
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_firewall_rules, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_firewall_rules)
                     elif file_path == network_rules_file:
                         default_network_rules = {
                             "blacklist": [],
                             "whitelist": [],
                             "description": "网络防火墙规则"
                         }
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(default_network_rules, f, ensure_ascii=False, indent=2)
+                        DataEncryption.write_json(Path(file_path), default_network_rules)
+                    elif file_path == ai_config_file:
+                        default_ai_config = {
+                            "enable_ai": False,
+                            "providers": {
+                                "deepseek": {"enabled": False, "api_key": "", "api_base": "https://api.deepseek.com", "model": "deepseek-chat"},
+                                "aliyun": {"enabled": False, "api_key": "", "api_base": "https://dashscope.aliyuncs.com", "model": "qwen-max"}
+                            },
+                            "temperature": 0.7,
+                            "max_tokens": 1000
+                        }
+                        DataEncryption.write_json(Path(file_path), default_ai_config)
                     else:
+                        # 其他文件：创建空文件（明文，非敏感数据）
                         with open(file_path, 'w', encoding='utf-8') as f:
                             f.write("")
                     safe_print(f"✅ 已创建文件: {file_path}")
@@ -10584,6 +10625,7 @@ class SystemFunctions:
             safe_print("⚠️  部分问题未能修复，请手动检查")
             SystemLog.log(f"一键修复系统完成，修复了{repair_success_count}/{len(issues)}个问题")
             return False
+
 
 # ==================== 更新类型表 ====================
 update_type_table = {
