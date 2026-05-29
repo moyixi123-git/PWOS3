@@ -2,7 +2,7 @@
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue)
 ![平台](https://img.shields.io/badge/平台-Windows%20%7C%20Linux%20%7C%20macOS-green)
-![许可证](https://img.shields.io/badge/许可证-MIT-yellow)
+![许可证](https://img.shields.io/badge/许可证-Apache%202.0-yellow)
 ![版本](https://img.shields.io/badge/版本-v3.0-red)
 
 > 开源跨平台 Python 一体化学习平台，纯命令行界面，轻量高效
@@ -292,7 +292,9 @@ A: 函数定义后，直接使用函数名调用即可，如 `calc_sum()`，不�
 
 ## 📜 许可证
 
-本项目采用 MIT License 开源协议。
+本项目采用 Apache License 2.0 开源协议。
+
+Copyright © 2024-2026 moyixi123-git
 
 ---
 
@@ -557,7 +559,9 @@ A: After defining a function, use the function name directly to call it, e.g., `
 
 ## License
 
-MIT License
+Apache License 2.0
+
+Copyright © 2024-2026 moyixi123-git
 
 ---
 
