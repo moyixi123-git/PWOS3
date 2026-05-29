@@ -1,5 +1,8 @@
 # ==================== std_lib.py - PWOS3 超级增强标准库 ====================
-# 版本: 3.1 - 修复版
+# 版本: 4.0 - 终极增强版
+# 新增功能: ThreadPool, Cache, Retry, RingBuffer, Stopwatch, LRU, EventBus, 
+#          ObjectPool, Lazy, CsvReader, IniConfig, SortedSet, Batched, 
+#          Profiler, Zip, Tee, Observer, Semaphore, MemoryPool, BitField
 
 import os, sys, json, time, random, hashlib, datetime, shutil, zipfile, tarfile
 import re, base64, csv, sqlite3, subprocess, socket, platform, math, textwrap
@@ -7,7 +10,7 @@ import io, glob, fnmatch, tempfile, configparser, logging, string, secrets
 import getpass, threading, queue, struct, itertools, collections, enum
 import heapq, bisect, functools, operator, inspect, copy, weakref, contextlib
 import concurrent.futures, asyncio, typing, urllib.request, urllib.parse
-from typing import Any, Dict, List, Tuple, Optional, Union, Callable, TypeVar, Generic
+from typing import Any, Dict, List, Tuple, Optional, Union, Callable, TypeVar, Generic, Iterator
 from collections import OrderedDict, defaultdict, Counter, deque, namedtuple
 from functools import wraps, partial, reduce, lru_cache
 from contextlib import contextmanager
@@ -577,14 +580,12 @@ class Tuple:
 class Algo:
     @staticmethod
     def sort(data, reverse=False, key=None):
-        """排序，支持 key 参数"""
         if key is not None:
             return sorted(data, key=key, reverse=reverse)
         return sorted(data, reverse=reverse)
     
     @staticmethod
     def stable_sort(data, key=None, reverse=False):
-        """稳定排序"""
         return sorted(data, key=key, reverse=reverse)
     
     @staticmethod
@@ -832,7 +833,7 @@ class JSON:
 class HTTP:
     @staticmethod
     def get(url, headers=None, timeout=30):
-        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/3.0'})
+        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/4.0'})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode('utf-8')
     @staticmethod
@@ -1662,7 +1663,7 @@ class Network:
     @staticmethod
     def get(url, timeout=30):
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/3.0'})
+            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/4.0'})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode('utf-8')
         except:
@@ -1817,7 +1818,6 @@ class RandomUtil:
         return random.choice(colors)
     @staticmethod
     def uuid():
-        """生成 UUID"""
         return str(_uuid.uuid4())
 
 # ==================== 19. 颜色工具类 ====================
@@ -1893,11 +1893,8 @@ class Color:
 # ==================== 20. 系统信息类 ====================
 
 class SystemInfo:
-    """系统信息类"""
-    
     @staticmethod
     def info() -> Dict[str, str]:
-        """获取完整系统信息"""
         return {
             'system': platform.system(),
             'node': platform.node(),
@@ -1908,35 +1905,27 @@ class SystemInfo:
             'python': sys.version,
             'python_version': sys.version.split()[0]
         }
-    
     @staticmethod
     def name() -> str:
         return platform.system()
-    
     @staticmethod
     def version() -> str:
         return platform.version()
-    
     @staticmethod
     def machine() -> str:
         return platform.machine()
-    
     @staticmethod
     def processor() -> str:
         return platform.processor()
-    
     @staticmethod
     def hostname() -> str:
         return platform.node()
-    
     @staticmethod
     def is_windows() -> bool:
         return platform.system() == "Windows"
-    
     @staticmethod
     def is_linux() -> bool:
         return platform.system() == "Linux"
-    
     @staticmethod
     def is_macos() -> bool:
         return platform.system() == "Darwin"
@@ -1944,21 +1933,16 @@ class SystemInfo:
 # ==================== 21. 实用工具类 ====================
 
 class Utils:
-    """实用工具集"""
-    
     @staticmethod
     def wait(seconds: float):
         time.sleep(seconds)
-    
     @staticmethod
     def clear_screen():
         os.system('cls' if platform.system() == 'Windows' else 'clear')
-    
     @staticmethod
     def get_input(prompt: str, default: str = "") -> str:
         result = input(prompt).strip()
         return result if result else default
-    
     @staticmethod
     def confirm(prompt: str, default: bool = False) -> bool:
         default_text = "Y/n" if default else "y/N"
@@ -1966,22 +1950,18 @@ class Utils:
         if not result:
             return default
         return result in ['y', 'yes', '是', '确认']
-    
     @staticmethod
     def progress_bar(current: int, total: int, width: int = 50, prefix: str = "") -> str:
         percent = current / total
         filled = int(width * percent)
         bar = "█" * filled + "░" * (width - filled)
         return f"{prefix}[{bar}] {percent*100:.1f}% ({current}/{total})"
-    
     @staticmethod
     def safe_divide(a: float, b: float, default: float = 0) -> float:
         return a / b if b != 0 else default
-    
     @staticmethod
     def chunk_list(data: List, size: int) -> list:
         return [data[i:i+size] for i in range(0, len(data), size)]
-    
     @staticmethod
     def flatten(lst: List) -> List:
         result = []
@@ -1991,11 +1971,598 @@ class Utils:
             else:
                 result.append(item)
         return result
-    
     @staticmethod
     def unique_preserve_order(lst: List) -> List:
         seen = set()
         return [x for x in lst if not (x in seen or seen.add(x))]
+
+# ==================== BFS/图论扩展模块 ====================
+
+class GraphAlgo:
+    """图论算法扩展模块"""
+    
+    @staticmethod
+    def bfs_graph(graph, start, target, o=False):
+        """图结构 BFS"""
+        from collections import deque
+        start_time = time.time()
+        
+        queue = deque([(start, [start])])
+        visited = {start}
+        visited_count = 1
+        
+        while queue:
+            node, path = queue.popleft()
+            if node == target:
+                elapsed_ms = (time.time() - start_time) * 1000
+                if o:
+                    return path, elapsed_ms, visited_count
+                return path
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    visited_count += 1
+                    queue.append((neighbor, path + [neighbor]))
+        
+        elapsed_ms = (time.time() - start_time) * 1000
+        if o:
+            return [], elapsed_ms, visited_count
+        return []
+    
+    @staticmethod
+    def bfs_grid(grid, start, target_value, o=False):
+        """网格 BFS"""
+        from collections import deque
+        start_time = time.time()
+        
+        target = None
+        for i in range(len(grid)):
+            for j in range(len(grid[0])):
+                if grid[i][j] == target_value:
+                    target = (i, j)
+                    break
+            if target:
+                break
+        
+        if not target:
+            if o:
+                return [], 0, 0
+            return []
+        
+        sx, sy = start
+        queue = deque([(sx, sy, [(sx, sy)])])
+        visited = {(sx, sy)}
+        visited_count = 1
+        directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        
+        while queue:
+            cx, cy, path = queue.popleft()
+            if (cx, cy) == target:
+                elapsed_ms = (time.time() - start_time) * 1000
+                if o:
+                    return path, elapsed_ms, visited_count
+                return path
+            for dx, dy in directions:
+                nx, ny = cx + dx, cy + dy
+                if 0 <= nx < len(grid) and 0 <= ny < len(grid[0]):
+                    if grid[nx][ny] != 0 and (nx, ny) not in visited:
+                        visited.add((nx, ny))
+                        visited_count += 1
+                        queue.append((nx, ny, path + [(nx, ny)]))
+        
+        if o:
+            return [], (time.time() - start_time) * 1000, visited_count
+        return []
+    
+    @staticmethod
+    def bfs_shortest_distance(graph, start, target):
+        """获取最短路径长度"""
+        path = GraphAlgo.bfs_graph(graph, start, target)
+        return len(path) - 1 if path else -1
+    
+    @staticmethod
+    def has_path(graph, start, target):
+        """判断是否存在路径"""
+        path = GraphAlgo.bfs_graph(graph, start, target)
+        return len(path) > 0
+    
+    @staticmethod
+    def dfs(graph, start, target, o=False):
+        """深度优先搜索"""
+        start_time = time.time()
+        
+        stack = [(start, [start])]
+        visited = {start}
+        visited_count = 1
+        
+        while stack:
+            node, path = stack.pop()
+            if node == target:
+                elapsed_ms = (time.time() - start_time) * 1000
+                if o:
+                    return path, elapsed_ms, visited_count
+                return path
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    visited_count += 1
+                    stack.append((neighbor, path + [neighbor]))
+        
+        elapsed_ms = (time.time() - start_time) * 1000
+        if o:
+            return [], elapsed_ms, visited_count
+        return []
+    
+    @staticmethod
+    def dijkstra(graph, start, target, o=False):
+        """Dijkstra 最短路径（带权重）"""
+        import heapq
+        start_time = time.time()
+        
+        pq = [(0, start, [start])]
+        distances = {start: 0}
+        visited_count = 1
+        
+        while pq:
+            dist, node, path = heapq.heappop(pq)
+            if node == target:
+                elapsed_ms = (time.time() - start_time) * 1000
+                if o:
+                    return path, dist, elapsed_ms, visited_count
+                return path
+            if dist > distances.get(node, float('inf')):
+                continue
+            for neighbor, weight in graph.get(node, []):
+                new_dist = dist + weight
+                if new_dist < distances.get(neighbor, float('inf')):
+                    distances[neighbor] = new_dist
+                    visited_count += 1
+                    heapq.heappush(pq, (new_dist, neighbor, path + [neighbor]))
+        
+        elapsed_ms = (time.time() - start_time) * 1000
+        if o:
+            return [], -1, elapsed_ms, visited_count
+        return []
+    
+    @staticmethod
+    def has_cycle(graph):
+        """检测图中是否有环"""
+        visited = set()
+        rec_stack = set()
+        
+        def dfs(node):
+            visited.add(node)
+            rec_stack.add(node)
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    if dfs(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+            rec_stack.remove(node)
+            return False
+        
+        for node in graph:
+            if node not in visited:
+                if dfs(node):
+                    return True
+        return False
+    
+    @staticmethod
+    def topological_sort(graph):
+        """拓扑排序"""
+        from collections import deque
+        in_degree = {node: 0 for node in graph}
+        for node in graph:
+            for neighbor in graph[node]:
+                in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+        
+        queue = deque([node for node in graph if in_degree[node] == 0])
+        result = []
+        
+        while queue:
+            node = queue.popleft()
+            result.append(node)
+            for neighbor in graph.get(node, []):
+                in_degree[neighbor] -= 1
+                if in_degree[neighbor] == 0:
+                    queue.append(neighbor)
+        
+        return result if len(result) == len(graph) else []
+
+# ==================== 22. ========== 新增功能模块 ========== ====================
+
+# 22.1 ThreadPool - 线程池轻量封装
+class ThreadPool:
+    def __init__(self, max_workers=None):
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    def submit(self, fn, *args, **kwargs):
+        return Future(self._executor.submit(fn, *args, **kwargs))
+    def map(self, fn, *iterables):
+        return self._executor.map(fn, *iterables)
+    def shutdown(self, wait=True):
+        self._executor.shutdown(wait=wait)
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.shutdown()
+
+# 22.2 Cache - LRU/LFU 缓存，支持 TTL
+class Cache:
+    def __init__(self, maxsize=128, ttl=None, policy='lru'):
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self.policy = policy  # 'lru' or 'lfu'
+        self._cache = {}
+        self._usage = {}  # for lru: timestamp, for lfu: frequency
+    def _evict(self):
+        if len(self._cache) < self.maxsize:
+            return
+        if self.policy == 'lru':
+            key = min(self._usage.keys(), key=lambda k: self._usage[k])
+        else:  # lfu
+            key = min(self._usage.keys(), key=lambda k: self._usage[k])
+        if key in self._cache:
+            del self._cache[key]
+            del self._usage[key]
+    def set(self, key, value):
+        self._evict()
+        self._cache[key] = (value, time.time())
+        self._usage[key] = 0 if self.policy == 'lfu' else time.time()
+    def get(self, key, default=None):
+        if key not in self._cache:
+            return default
+        value, ts = self._cache[key]
+        if self.ttl and time.time() - ts > self.ttl:
+            del self._cache[key]
+            del self._usage[key]
+            return default
+        if self.policy == 'lru':
+            self._usage[key] = time.time()
+        else:
+            self._usage[key] = self._usage.get(key, 0) + 1
+        return value
+    def contains(self, key):
+        return key in self._cache
+    def clear(self):
+        self._cache.clear()
+        self._usage.clear()
+    def size(self):
+        return len(self._cache)
+
+# 22.3 Retry - 重试装饰器，指数退避
+def retry(max_attempts=3, delay=1, backoff=2, exceptions=(Exception,)):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            _delay = delay
+            for attempt in range(max_attempts):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    if attempt == max_attempts - 1:
+                        raise
+                    time.sleep(_delay)
+                    _delay *= backoff
+            return None
+        return wrapper
+    return decorator
+
+# 22.4 RingBuffer - 循环队列
+class RingBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self._buffer = [None] * capacity
+        self._head = 0
+        self._tail = 0
+        self._size = 0
+    def push_back(self, value):
+        if self._size == self.capacity:
+            self._head = (self._head + 1) % self.capacity
+        else:
+            self._size += 1
+        self._buffer[self._tail] = value
+        self._tail = (self._tail + 1) % self.capacity
+    def pop_front(self):
+        if self._size == 0:
+            return None
+        value = self._buffer[self._head]
+        self._head = (self._head + 1) % self.capacity
+        self._size -= 1
+        return value
+    def front(self):
+        if self._size == 0:
+            return None
+        return self._buffer[self._head]
+    def back(self):
+        if self._size == 0:
+            return None
+        return self._buffer[(self._tail - 1) % self.capacity]
+    def size(self):
+        return self._size
+    def empty(self):
+        return self._size == 0
+    def full(self):
+        return self._size == self.capacity
+
+# 22.5 Stopwatch - 高精度计时器
+class Stopwatch:
+    def __init__(self):
+        self._start = None
+        self._elapsed = 0
+        self._running = False
+    def start(self):
+        if not self._running:
+            self._start = time.perf_counter()
+            self._running = True
+        return self
+    def stop(self):
+        if self._running:
+            self._elapsed += time.perf_counter() - self._start
+            self._running = False
+        return self
+    def reset(self):
+        self._elapsed = 0
+        self._start = None
+        self._running = False
+        return self
+    def elapsed(self):
+        if self._running:
+            return self._elapsed + (time.perf_counter() - self._start)
+        return self._elapsed
+    def elapsed_ms(self):
+        return self.elapsed() * 1000
+    def elapsed_us(self):
+        return self.elapsed() * 1000000
+
+# 22.6 Lazy - 延迟求值
+class Lazy:
+    def __init__(self, func):
+        self._func = func
+        self._value = None
+        self._evaluated = False
+    def get(self):
+        if not self._evaluated:
+            self._value = self._func()
+            self._evaluated = True
+        return self._value
+    def is_evaluated(self):
+        return self._evaluated
+    def reset(self):
+        self._evaluated = False
+        self._value = None
+
+# 22.7 CsvReader / CsvWriter
+class CsvReader:
+    def __init__(self, filepath, delimiter=','):
+        self.filepath = filepath
+        self.delimiter = delimiter
+    def __enter__(self):
+        self._file = open(self.filepath, 'r', encoding='utf-8')
+        self._reader = csv.reader(self._file, delimiter=self.delimiter)
+        return self
+    def __exit__(self, *args):
+        self._file.close()
+    def __iter__(self):
+        return self
+    def __next__(self):
+        return next(self._reader)
+    def read_all(self):
+        with open(self.filepath, 'r', encoding='utf-8') as f:
+            return list(csv.reader(f, delimiter=self.delimiter))
+
+class CsvWriter:
+    def __init__(self, filepath, delimiter=','):
+        self.filepath = filepath
+        self.delimiter = delimiter
+    def __enter__(self):
+        self._file = open(self.filepath, 'w', encoding='utf-8', newline='')
+        self._writer = csv.writer(self._file, delimiter=self.delimiter)
+        return self
+    def __exit__(self, *args):
+        self._file.close()
+    def writerow(self, row):
+        self._writer.writerow(row)
+    def writerows(self, rows):
+        self._writer.writerows(rows)
+
+# 22.8 IniConfig - 轻量级 INI 读写
+class IniConfig:
+    def __init__(self, filepath=None):
+        self.filepath = filepath
+        self._config = configparser.ConfigParser()
+        if filepath and os.path.exists(filepath):
+            self._config.read(filepath, encoding='utf-8')
+    def get(self, section, key, default=None):
+        if self._config.has_section(section) and self._config.has_option(section, key):
+            return self._config.get(section, key)
+        return default
+    def get_int(self, section, key, default=0):
+        try:
+            return int(self.get(section, key, default))
+        except:
+            return default
+    def get_float(self, section, key, default=0.0):
+        try:
+            return float(self.get(section, key, default))
+        except:
+            return default
+    def get_bool(self, section, key, default=False):
+        try:
+            return self._config.getboolean(section, key) if self._config.has_section(section) else default
+        except:
+            return default
+    def set(self, section, key, value):
+        if not self._config.has_section(section):
+            self._config.add_section(section)
+        self._config.set(section, key, str(value))
+    def save(self, filepath=None):
+        path = filepath or self.filepath
+        if path:
+            with open(path, 'w', encoding='utf-8') as f:
+                self._config.write(f)
+
+# 22.9 SortedSet - 有序集合
+class SortedSet:
+    def __init__(self, iterable=None, key=None):
+        self._data = []
+        self.key = key
+        if iterable:
+            for item in iterable:
+                self.add(item)
+    def add(self, value):
+        pos = self._find_pos(value)
+        if pos < len(self._data) and self._equal(self._data[pos], value):
+            return
+        self._data.insert(pos, value)
+    def remove(self, value):
+        pos = self._find_pos(value)
+        if pos < len(self._data) and self._equal(self._data[pos], value):
+            self._data.pop(pos)
+    def _find_pos(self, value):
+        k = self.key(value) if self.key else value
+        lo, hi = 0, len(self._data)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            mk = self.key(self._data[mid]) if self.key else self._data[mid]
+            if mk < k:
+                lo = mid + 1
+            else:
+                hi = mid
+        return lo
+    def _equal(self, a, b):
+        ka = self.key(a) if self.key else a
+        kb = self.key(b) if self.key else b
+        return ka == kb
+    def __contains__(self, value):
+        pos = self._find_pos(value)
+        return pos < len(self._data) and self._equal(self._data[pos], value)
+    def __len__(self):
+        return len(self._data)
+    def __iter__(self):
+        return iter(self._data)
+    def to_list(self):
+        return self._data.copy()
+
+# 22.10 Batched - 批量处理迭代器
+def Batched(iterable, size):
+    it = iter(iterable)
+    while True:
+        batch = list(itertools.islice(it, size))
+        if not batch:
+            break
+        yield batch
+
+# 22.11 Profiler - 上下文管理器性能分析
+class Profiler:
+    def __init__(self, name="block"):
+        self.name = name
+        self._sw = Stopwatch()
+    def __enter__(self):
+        self._sw.start()
+        return self
+    def __exit__(self, *args):
+        self._sw.stop()
+        print(f"[Profiler] {self.name} took {self._sw.elapsed_ms():.2f} ms")
+    def elapsed_ms(self):
+        return self._sw.elapsed_ms()
+
+# 22.12 Zip - 并行迭代器（支持不等长，填充默认值）
+def Zip(*iterables, fill=None):
+    iters = [iter(it) for it in iterables]
+    while True:
+        result = []
+        for it in iters:
+            try:
+                result.append(next(it))
+            except StopIteration:
+                result.append(fill)
+        if all(v is fill and i == 0 for i, v in enumerate(result)):
+            break
+        yield tuple(result)
+
+# 22.13 Tee - 复制流（将迭代器分叉成多个）
+def Tee(iterator, n=2):
+    from itertools import tee
+    return tee(iterator, n)
+
+# 22.14 Observer - 观察者模式事件总线
+class EventBus:
+    def __init__(self):
+        self._listeners = defaultdict(list)
+    def on(self, event, callback):
+        self._listeners[event].append(callback)
+    def off(self, event, callback):
+        if callback in self._listeners[event]:
+            self._listeners[event].remove(callback)
+    def emit(self, event, **kwargs):
+        for callback in self._listeners[event]:
+            callback(**kwargs)
+    def clear(self, event=None):
+        if event:
+            self._listeners[event].clear()
+        else:
+            self._listeners.clear()
+
+# 22.15 Semaphore - 信号量
+class Semaphore:
+    def __init__(self, value=1):
+        self._sem = threading.Semaphore(value)
+    def acquire(self, blocking=True, timeout=None):
+        return self._sem.acquire(blocking=blocking, timeout=timeout)
+    def release(self):
+        self._sem.release()
+    def __enter__(self):
+        self.acquire()
+        return self
+    def __exit__(self, *args):
+        self.release()
+
+# 22.16 MemoryPool - 内存池
+class MemoryPool:
+    def __init__(self, object_type, capacity=100):
+        self.object_type = object_type
+        self.capacity = capacity
+        self._pool = []
+        self._allocated = 0
+    def alloc(self, *args, **kwargs):
+        if self._pool:
+            obj = self._pool.pop()
+        else:
+            obj = self.object_type(*args, **kwargs)
+            self._allocated += 1
+        return obj
+    def free(self, obj):
+        if len(self._pool) < self.capacity:
+            self._pool.append(obj)
+    def size(self):
+        return len(self._pool)
+    def allocated_count(self):
+        return self._allocated
+
+# 22.17 BitField - 位域读写
+class BitField:
+    def __init__(self, value=0, bits=32):
+        self._value = value & ((1 << bits) - 1)
+        self._bits = bits
+    def set(self, pos, val):
+        if val:
+            self._value |= (1 << pos)
+        else:
+            self._value &= ~(1 << pos)
+    def get(self, pos):
+        return (self._value >> pos) & 1
+    def set_range(self, start, length, val):
+        mask = ((1 << length) - 1) << start
+        self._value = (self._value & ~mask) | ((val << start) & mask)
+    def get_range(self, start, length):
+        return (self._value >> start) & ((1 << length) - 1)
+    def to_int(self):
+        return self._value
+    def to_binary(self):
+        return bin(self._value)[2:].zfill(self._bits)
+    def __int__(self):
+        return self._value
 
 # ==================== StdLib 统一实例 ====================
 
@@ -2084,7 +2651,7 @@ class StdLib:
         self.random = RandomUtil()
         self.color = Color()
         
-        # 新增模块
+        # 基础模块
         self.json = JSON()
         self.http = HTTP()
         self.crypto = Crypto()
@@ -2097,6 +2664,29 @@ class StdLib:
         self.system = SystemInfo()
         self.utils = Utils()
         self.sys = SystemInfo()
+        
+        # 图论算法模块
+        self.graph = GraphAlgo()
+        
+        # ========== 新增功能 ==========
+        self.thread_pool = ThreadPool
+        self.cache = Cache
+        self.retry = retry
+        self.ring_buffer = RingBuffer
+        self.stopwatch = Stopwatch
+        self.lazy = Lazy
+        self.csv_reader = CsvReader
+        self.csv_writer = CsvWriter
+        self.ini_config = IniConfig
+        self.sorted_set = SortedSet
+        self.batched = Batched
+        self.profiler = Profiler
+        self.zip = Zip
+        self.tee = Tee
+        self.event_bus = EventBus
+        self.semaphore = Semaphore
+        self.memory_pool = MemoryPool
+        self.bitfield = BitField
 
 # 创建全局实例
 std = StdLib()
