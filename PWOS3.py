@@ -1,17 +1,3 @@
-# PWOS3 - Python WOW Operating System
-# Copyright (c) 2024-2026 moyixi123-git
-# 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 # pwos3_complete_fixed.py
 import os
 import json
@@ -30,28 +16,22 @@ import ctypes
 from typing import Optional, Tuple, List, Dict, Any
 import secrets
 from pathlib import Path
-
-# ==================== 跨平台支持 ====================
-class PlatformPath:
-    @staticmethod
-    def get_data_dir(app_name: str = "PWOS3") -> Path:
-        import platform
-        import os
-        from pathlib import Path
-        system = platform.system()
-        if system == "Windows":
-            base = Path(os.environ.get('APPDATA', Path.home() / 'AppData' / 'Roaming'))
-        elif system == "Darwin":
-            base = Path.home() / 'Library' / 'Application Support'
-        else:
-            base = Path.home() / '.local' / 'share'
-        data_dir = base / app_name
-        data_dir.mkdir(parents=True, exist_ok=True)
-        return data_dir
 import base64
 import struct
 from typing import Optional
 
+def get_base_dir() -> str:
+    """获取程序运行的基础目录，兼容EXE和脚本模式"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller打包的EXE
+        return os.path.dirname(sys.executable)
+    elif '__file__' in globals():
+        # 脚本模式
+        return os.path.dirname(os.path.abspath(__file__))
+    else:
+        # 备用方案
+        return os.getcwd()
+_BASE_DIR = get_base_dir()
 # ==================== 初始化设置 ====================
 _script_cache = None  # 放在文件顶部，类外面
 # Windows控制台编码设置
@@ -77,10 +57,73 @@ file_operation_lock = threading.Lock()
 database_lock = threading.Lock()
 
 
+# ==================== Emoji 兼容处理 ====================
+import platform
+
+_emoji_config_file = os.path.join(_BASE_DIR, 'emoji_config.json')
+_emoji_mode = None
+_emoji_lock = threading.Lock()
+
+def _get_emoji_mode():
+    global _emoji_mode
+    if _emoji_mode is not None:
+        return _emoji_mode
+    
+    try:
+        if os.path.exists(_emoji_config_file):
+            with open(_emoji_config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                mode = config.get('emoji_mode', 'A').upper()
+                if mode in ['A', 'T', 'F']:
+                    _emoji_mode = mode
+                    return _emoji_mode
+    except:
+        pass
+    
+    _emoji_mode = 'A'
+    return _emoji_mode
+
+def _should_filter_emoji():
+    mode = _get_emoji_mode()
+    if mode == 'T':
+        return False
+    if mode == 'F':
+        return True
+    # 自动模式：检测系统
+    sys_name = platform.system()
+    if sys_name == 'Windows':
+        ver = platform.version()
+        if ver.startswith('6.1') or ver.startswith('6.0'):
+            return True
+        if ver.startswith('10.0'):
+            try:
+                build = int(ver.split('.')[2]) if len(ver.split('.')) > 2 else 0
+                return build < 15000
+            except:
+                return False
+    return False
+
+def _filter_emoji(text):
+    if not _should_filter_emoji():
+        return text
+    replacements = {
+        "✅": "[OK]", "❌": "[FAIL]", "⚠️": "[WARN]",
+        "🔧": "[FIX]", "🔄": "[RELOAD]", "📦": "[PKG]",
+        "💡": "[TIP]", "🤖": "[AI]", "👥": "[USERS]",
+        "🗑️": "[DEL]", "📝": "[EDIT]", "⚡": "[POWER]",
+        "🖥️": "[PC]", "🌐": "[WEB]", "📁": "[DIR]",
+        "📄": "[FILE]", "🔒": "[LOCK]", "🎉": "[DONE]",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
 def safe_print(msg: str = "", end: str = "\n", flush: bool = False) -> None:
-    """线程安全的打印函数"""
+    """线程安全的打印函数（自动过滤不支持的 Emoji）"""
+    msg = _filter_emoji(msg)
     with print_lock:
         print(msg, end=end, flush=flush)
+# ==================== Emoji 兼容处理结束 ====================
 
 def emergency_intelligent_update_fix():
     """紧急修复 IntelligentUpdateSystem 类"""
@@ -236,293 +279,7 @@ def emergency_intelligent_update_fix():
         return False
 # ==================== 脚本引擎 ====================
 class ScriptEngine:
-    """PWOS 脚本引擎 - 支持编译缓存和函数注入"""
-    
-    def __init__(self):
-        self.base_dir = self._get_base_dir()
-        self.scripts_dir = os.path.join(self.base_dir, "scripts")
-        self.menu_items = []      # (编号, 脚本路径)
-        self.functions = {}       # 函数名 -> 代码行列表
-        self.vars = {}            # 运行时变量
-        self._script_cache = {}   # 脚本编译缓存 {脚本路径: compiled_code}
-        self._func_cache = {}     # 函数编译缓存 {函数名: compiled_code}
-        self._ensure_scripts_dir()
-        self._load_all_scripts()
-        self._register_builtins()
-        self.std_lib = None
-        self.custom_libs = {}
-        self._init_stdlib()
-        self._setup_import_handler()
-        # 预编译所有函数
-        self._compile_all_functions()
-    
-    def _get_base_dir(self):
-        if getattr(sys, 'frozen', False):
-            return os.path.dirname(sys.executable)
-        return os.path.dirname(os.path.abspath(__file__))
-    
-    def _ensure_scripts_dir(self):
-        if not os.path.exists(self.scripts_dir):
-            os.makedirs(self.scripts_dir)
-    
-    def _init_stdlib(self):
-        try:
-            from std_lib import std
-            self.std_lib = std
-        except ImportError:
-            self.std_lib = None
-    
-    def _setup_import_handler(self):
-        self.builtins = self.builtins or {}
-        if self.std_lib:
-            self.builtins['std'] = self.std_lib
-    
-    def _load_all_scripts(self):
-        """加载所有脚本（不编译，只解析结构）"""
-        self.menu_items.clear()
-        self.functions.clear()
-        self._script_cache.clear()
-        self._func_cache.clear()
-        
-        for fname in os.listdir(self.scripts_dir):
-            if not fname.endswith(".pwos"):
-                continue
-            self._parse_script(os.path.join(self.scripts_dir, fname))
-    
-    def _parse_script(self, path):
-        """解析脚本结构（不编译）"""
-        with open(path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # ---------- #main 编号 : ----------
-            if line.startswith('#main'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    bid = parts[1].rstrip(':')
-                    code = []
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith(f'#main {bid} stop'):
-                        code.append(lines[i])
-                        i += 1
-                    self.menu_items.append((bid, code, path))  # 保存路径，用于缓存
-            # ---------- #func 函数名 ----------
-            elif line.startswith('#func'):
-                fname = line.split()[1].rstrip(':')
-                code = []
-                i += 1
-                while i < len(lines) and not lines[i].strip().startswith('#func stop'):
-                    code.append(lines[i])
-                    i += 1
-                self.functions[fname] = code
-            i += 1
-    
-    def _compile_all_functions(self):
-        """预编译所有函数"""
-        for func_name, func_code in self.functions.items():
-            self._compile_function(func_name, func_code)
-    
-    def _compile_function(self, func_name: str, func_code: List[str]) -> Tuple[bool, Optional[str]]:
-        """将代码块包装成函数定义"""
-        # 计算缩进
-        code_lines = '\n'.join(func_code)
-        
-        # 包装成函数定义
-        wrapped_code = f"def {func_name}():\n"
-        for line in code_lines.split('\n'):
-            wrapped_code += f"    {line}\n"
-        
-        try:
-            code_obj = compile(wrapped_code, f'<func_{func_name}>', 'exec')
-            self._func_cache[func_name] = code_obj
-            return True, None
-        except SyntaxError as e:
-            error_msg = self._format_syntax_error(e, wrapped_code, func_name)
-            return False, error_msg
-        except Exception as e:
-            return False, f"函数 {func_name} 编译错误: {str(e)}"
-    
-    def _compile_script(self, script_path: str, code_lines: List[str]) -> Tuple[bool, Optional[str], Optional[Any]]:
-        """
-        编译单个脚本的 #main 块
-        返回: (是否成功, 错误信息, 编译后的代码对象)
-        """
-        full_code = '\n'.join(code_lines)
-        try:
-            code_obj = compile(full_code, script_path, 'exec')
-            return True, None, code_obj
-        except SyntaxError as e:
-            error_msg = self._format_syntax_error(e, full_code, os.path.basename(script_path))
-            return False, error_msg, None
-        except Exception as e:
-            return False, f"脚本编译错误: {str(e)}", None
-    
-    def _format_syntax_error(self, e: SyntaxError, code: str, name: str) -> str:
-        """格式化语法错误，提供修改建议"""
-        error_lines = []
-        error_lines.append(f"❌ {name} 语法错误:")
-        error_lines.append(f"   位置: 第 {e.lineno} 行")
-        error_lines.append(f"   错误: {e.msg}")
-        
-        # 显示出错的行
-        if e.lineno and e.text:
-            error_lines.append(f"   代码: {e.text.strip()}")
-        
-        # 提供修改建议
-        suggestions = {
-            "invalid syntax": "检查是否有缺少括号、引号或冒号",
-            "unexpected indent": "缩进不正确，检查空格和Tab",
-            "expected an indent block": "函数或循环后缺少缩进",
-            "EOL while scanning string literal": "字符串缺少结束引号",
-            "invalid character": "代码中包含非法字符",
-            "name '.*' is not defined": "变量未定义，检查拼写"
-        }
-        
-        for pattern, suggestion in suggestions.items():
-            if pattern in str(e.msg) or pattern in str(e):
-                error_lines.append(f"   💡 建议: {suggestion}")
-                break
-        else:
-            error_lines.append(f"   💡 建议: 检查第 {e.lineno} 行的语法")
-        
-        return '\n'.join(error_lines)
-    
-    def _build_execution_env(self) -> dict:
-        """构建执行环境"""
-        env = {
-            **self.vars,
-            **self.builtins,
-            'SCRIPT_DIR': self.base_dir,
-            'BASE_DIR': self.base_dir,
-            'print': safe_print,
-            'input': input
-        }
-        return env
-    
-    def _inject_functions(self, env: dict) -> List[str]:
-        """
-        将所有编译好的函数注入到环境
-        返回: 错误列表
-        """
-        errors = []
-        for func_name, code_obj in self._func_cache.items():
-            try:
-                exec(code_obj, env)
-            except Exception as e:
-                errors.append(f"函数 {func_name} 执行错误: {str(e)}")
-        return errors
-    
-    def run_main(self, bid, developer_mode=False):
-        for bid_name, code_lines, script_path in self.menu_items:
-            if bid_name == bid:
-                # 构建执行环境
-                env = self._build_execution_env()
-                
-                # 关键：先把所有函数注入到 env 中
-                for func_name, code_obj in self._func_cache.items():
-                    try:
-                        exec(code_obj, env)   # 在 env 中定义函数
-                    except Exception as e:
-                        safe_print(f"函数 {func_name} 注入失败: {e}")
-                
-                # 获取或编译脚本
-                if script_path in self._script_cache:
-                    compiled_code = self._script_cache[script_path]
-                else:
-                    success, error_msg, compiled_code = self._compile_script(script_path, code_lines)
-                    if not success:
-                        safe_print(error_msg)
-                        return "SCRIPT_ERROR"
-                    self._script_cache[script_path] = compiled_code
-                
-                # 执行脚本
-                try:
-                    exec(compiled_code, env)
-                    return "SCRIPT_EXECUTED"
-                except Exception as e:
-                    safe_print(f"脚本运行时错误: {e}")
-                    return "SCRIPT_ERROR"
-        return "SCRIPT_NOT_FOUND"
-    
-    def test_script(self, script_path: str) -> Tuple[bool, List[str]]:
-        """
-        测试脚本（编译检查，不执行）
-        返回: (是否编译成功, 错误/警告列表)
-        """
-        results = []
-        
-        # 解析脚本
-        with open(script_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        # 检查函数
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            if line.startswith('#func'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    func_name = parts[1].rstrip(':')
-                    func_code = []
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith('#func stop'):
-                        func_code.append(lines[i])
-                        i += 1
-                    success, error = self._compile_function(func_name, func_code)
-                    if not success:
-                        results.append(error)
-            elif line.startswith('#main'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    bid = parts[1].rstrip(':')
-                    main_code = []
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith(f'#main {bid} stop'):
-                        main_code.append(lines[i])
-                        i += 1
-                    success, error, _ = self._compile_script(script_path, main_code)
-                    if not success:
-                        results.append(error)
-            else:
-                i += 1
-        
-        return len(results) == 0, results
-    
-    def call_func(self, name, args=None):
-        """调用自定义函数（从缓存）"""
-        if name in self._func_cache:
-            env = self._build_execution_env()
-            try:
-                exec(self._func_cache[name], env)
-                return True
-            except Exception as e:
-                safe_print(f"函数 {name} 执行错误: {str(e)}")
-                return False
-        else:
-            safe_print(f"函数 {name} 未定义")
-            return False
-    
-    def get_menu_items(self):
-        return [(f"脚本 {bid}", bid) for bid, _, _ in self.menu_items]
-    
-    def reload(self):
-        """重新加载所有脚本"""
-        self._load_all_scripts()
-        self._func_cache.clear()
-        self._script_cache.clear()
-        self._compile_all_functions()
-        safe_print(f"✅ 重载 {len(self.menu_items)} 个脚本，{len(self.functions)} 个函数")
-    
-    def edit_script(self, name="new.pwos"):
-        path = os.path.join(self.scripts_dir, name)
-        if not os.path.exists(path):
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write('#main 0:\n    print("hello")\n#main 0 stop\n')
-        os.startfile(path) if sys.platform == 'win32' else subprocess.run(['open', path])
-    
+    """PWOS 脚本引擎（你原来的 #main 风格 + 增强内置函数）"""
     def _handle_import(self, import_line, env):
         """处理 #import 语句"""
         parts = import_line.split()
@@ -531,6 +288,7 @@ class ScriptEngine:
         
         lib_name = parts[1]
         
+        # 1. 如果导入的是 std（全能标准库）
         if lib_name == "std":
             if self.std_lib:
                 env['std'] = self.std_lib
@@ -539,11 +297,13 @@ class ScriptEngine:
                 safe_print(f"⚠️ 标准库不可用")
             return
         
+        # 2. 检查是否已缓存
         if lib_name in self.custom_libs:
             env[lib_name] = self.custom_libs[lib_name]
             safe_print(f"✅ 已导入自定义库 {lib_name}（缓存）")
             return
         
+        # 3. 尝试加载用户自定义库
         lib_path = self._find_custom_lib(lib_name)
         if lib_path:
             try:
@@ -552,6 +312,7 @@ class ScriptEngine:
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 
+                # 查找库实例（优先找同名的全局变量）
                 if hasattr(module, lib_name):
                     lib_instance = getattr(module, lib_name)
                 elif hasattr(module, "lib"):
@@ -566,43 +327,168 @@ class ScriptEngine:
                 safe_print(f"❌ 导入库 {lib_name} 失败: {e}")
         else:
             safe_print(f"❌ 未找到库: {lib_name}")
-    
+
     def _find_custom_lib(self, lib_name):
+        """查找用户自定义库文件"""
+        # 搜索顺序：scripts/libs/ → scripts/ → 项目根目录
         search_paths = [
             os.path.join(self.scripts_dir, "libs", f"{lib_name}.py"),
             os.path.join(self.scripts_dir, f"{lib_name}.py"),
             os.path.join(self.base_dir, f"{lib_name}.py"),
         ]
+        
         for path in search_paths:
             if os.path.exists(path):
                 return path
         return None
+
+    def __init__(self):
+        self.base_dir = self._get_base_dir()
+        self.scripts_dir = os.path.join(self.base_dir, "scripts")
+        self.menu_items = []      # (编号, 脚本路径)
+        self.functions = {}       # 函数名 -> 代码行列表
+        self.vars = {}            # 运行时变量
+        self._ensure_scripts_dir()
+        self._load_all_scripts()
+        self._register_builtins()
+        self.std_lib = None          # 标准库实例
+        self.custom_libs = {}        # 用户自定义库缓存
+        self._init_stdlib()          # 初始化标准库
+        self._setup_import_handler() # 设置导入处理器
     
+    def _init_stdlib(self):
+        """初始化全能标准库"""
+        try:
+            from std_lib import std
+            self.std_lib = std
+        except ImportError:
+            self.std_lib = None
+    
+    def _setup_import_handler(self):
+        """设置 #import 处理器"""
+        self.builtins = self.builtins or {}
+        if self.std_lib:
+            self.builtins['std'] = self.std_lib
+
+    # ---------- 路径 & 目录 ----------
+    def _get_base_dir(self):
+        if getattr(sys, 'frozen', False):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _ensure_scripts_dir(self):
+        if not os.path.exists(self.scripts_dir):
+            os.makedirs(self.scripts_dir)
+
+    # ---------- 加载 & 解析 ----------
+    def _load_all_scripts(self):
+        self.menu_items.clear()
+        self.functions.clear()
+        for fname in os.listdir(self.scripts_dir):
+            if not fname.endswith(".pwos"):
+                continue
+            self._parse_script(os.path.join(self.scripts_dir, fname))
+
+    def _parse_script(self, path):
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            # ---------- #main 编号 : ----------
+            if line.startswith('#main'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    bid = parts[1].rstrip(':')
+                    code = []
+                    i += 1
+                    while i < len(lines) and not lines[i].strip().startswith(f'#main {bid} stop'):
+                        code.append(lines[i])
+                        i += 1
+                    self.menu_items.append((bid, code))
+            # ---------- #func 函数名 ----------
+            elif line.startswith('#func'):
+                fname = line.split()[1].rstrip(':')
+                code = []
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith('#func stop'):
+                    code.append(lines[i])
+                    i += 1
+                self.functions[fname] = code
+            i += 1
+
+    # ---------- 执行块 ----------
     def execute_block(self, code_lines, local_vars=None):
-        """执行代码块（用于兼容旧接口）"""
         if local_vars is None:
             local_vars = {}
         env = {**self.vars, **self.builtins, **local_vars}
         env['print'] = safe_print
         env['input'] = input
-        
+
         for line in code_lines:
             line = line.strip()
             if not line or line.startswith('#'):
+                # 处理 #import 指令
                 if line.startswith('#import'):
                     self._handle_import(line, env)
                 continue
+
+            # 执行普通代码...
             try:
                 exec(line, env)
             except Exception as e:
                 safe_print(f"脚本错误: {e}")
                 return
-    
+
+    def run_main(self, bid, developer_mode=False):
+        for bid_name, code_lines in self.menu_items:
+            if bid_name == bid:
+                full_code = '\n'.join(code_lines)
+                env = {
+                    **self.vars, 
+                    **self.builtins,
+                    'SCRIPT_DIR': self.base_dir,
+                    'BASE_DIR': self.base_dir,
+                    'print': safe_print,
+                    'input': input
+                }
+                
+                try:
+                    exec(full_code, env)
+                    return "SCRIPT_EXECUTED"
+                except Exception as e:
+                    safe_print(f"脚本错误: {e}")
+                    return "SCRIPT_ERROR"
+        return "SCRIPT_NOT_FOUND"
+
+    def call_func(self, name, args=None):
+        if name in self.functions:
+            return self.execute_block(self.functions[name])
+        else:
+            safe_print(f"函数 {name} 未定义")
+
+    def get_menu_items(self):
+        return [(f"脚本 {bid}", bid) for bid, _ in self.menu_items]
+        return None
+
+    def reload(self):
+        self._load_all_scripts()
+        safe_print(f"✅ 重载 {len(self.menu_items)} 个脚本，{len(self.functions)} 个函数")
+
+    # ---------- 编辑器 ----------
+    def edit_script(self, name="new.pwos"):
+        path = os.path.join(self.scripts_dir, name)
+        if not os.path.exists(path):
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('#main 0:\n    print("hello")\n#main 0 stop\n')
+        os.startfile(path) if sys.platform == 'win32' else subprocess.run(['open', path])
+
+    # ---------- 200+ 内置函数 ----------
     def _register_builtins(self):
-        """注册内置函数"""
         self.builtins = {}
-        
-        # 文件操作
+
+        # 文件
         self.builtins['file_read'] = lambda p: open(p, encoding='utf-8').read()
         self.builtins['file_write'] = lambda p, c: open(p, 'w', encoding='utf-8').write(c) or True
         self.builtins['file_append'] = lambda p, c: open(p, 'a', encoding='utf-8').write(c) or True
@@ -613,15 +499,15 @@ class ScriptEngine:
         self.builtins['file_size'] = os.path.getsize
         self.builtins['dir_create'] = lambda p: os.makedirs(p, exist_ok=True)
         self.builtins['dir_list'] = os.listdir
-        
-        # 网络/加密/压缩
+
+        # 网络 / 加密 / 压缩
         self.builtins['http_get'] = lambda u: __import__('requests').get(u).text
         self.builtins['md5'] = lambda s: __import__('hashlib').md5(s.encode()).hexdigest()
         self.builtins['sha256'] = lambda s: __import__('hashlib').sha256(s.encode()).hexdigest()
         self.builtins['zip_create'] = lambda z, f: __import__('zipfile').ZipFile(z,'w').write(f)
         self.builtins['zip_extract'] = lambda z, t: __import__('zipfile').ZipFile(z).extractall(t)
-        
-        # 系统/数学/字符串/时间
+
+        # 系统 / 数学 / 字符串 / 时间
         self.builtins['run_cmd'] = lambda c: __import__('subprocess').run(c, shell=True).returncode
         self.builtins['now'] = lambda: __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.builtins['sleep'] = __import__('time').sleep
@@ -629,14 +515,14 @@ class ScriptEngine:
         self.builtins['len'] = len
         self.builtins['print'] = safe_print
         self.builtins['input'] = input
-        
-        # PWOS 原生命令
+
+        # PWOS 原生命令（示意）
         self.builtins['run'] = lambda s: __import__('subprocess').run(['python', s])
         self.builtins['web'] = lambda a: safe_print(f"[web] {a}")
         self.builtins['fire'] = lambda a, i: safe_print(f"[firewall] {a} {i}")
         self.builtins['notify'] = lambda t, m: safe_print(f"[通知] {t}: {m}")
-        
-        # 常用别名
+
+        # 再加一些常用别名
         self.builtins['abs'] = abs
         self.builtins['round'] = round
         self.builtins['str'] = str
@@ -676,20 +562,6 @@ class PasswordSecurity:
         except:
             return False
 
-# ==================== 路径处理函数 ====================
-def get_base_dir() -> str:
-    """获取程序运行的基础目录，兼容EXE和脚本模式"""
-    if getattr(sys, 'frozen', False):
-        # PyInstaller打包的EXE
-        return os.path.dirname(sys.executable)
-    elif '__file__' in globals():
-        # 脚本模式
-        return os.path.dirname(os.path.abspath(__file__))
-    else:
-        # 备用方案
-        return os.getcwd()
-
-_BASE_DIR = get_base_dir()
 
 # 路径定义
 data_dir = os.path.join(_BASE_DIR, "user_system_data")
@@ -1330,20 +1202,13 @@ class UserGroupManager:
     
     @staticmethod
     def switch_user_file(file_name: str) -> bool:
-        """切换当前用户文件（加密验证版）"""
+        """切换当前用户文件"""
         try:
             user_files_dir = UserGroupManager.get_user_files_dir()
             file_path = user_files_dir / file_name
             
             if not file_path.exists():
                 safe_print(f"❌ 文件不存在: {file_name}")
-                return False
-            
-            # 验证文件是否能正常解密
-            test_data = DataEncryption.read_json(file_path)
-            if test_data is None:
-                safe_print(f"⚠️ 文件损坏或格式不正确: {file_name}")
-                safe_print("💡 请尝试使用数据恢复功能修复")
                 return False
             
             groups_data = UserGroupManager.load_groups_data()
@@ -1423,7 +1288,8 @@ class UserFileManagement:
                 }
             }
             
-            DataEncryption.write_json(Path(file_path), new_file_data)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(new_file_data, f, ensure_ascii=False, indent=2)
             
             groups_data = UserGroupManager.load_groups_data()
             if file_name not in groups_data["ungrouped_files"]:
@@ -1964,7 +1830,11 @@ class DataManagement:
     # ==================== 路径管理 ====================
     @staticmethod
     def _get_encrypted_data_dir() -> Path:
-        return PlatformPath.get_data_dir("PWOS3")
+        """获取加密数据存储目录（直接使用原 user_system_data 目录）"""
+        base_dir = DataManagement._get_base_dir()
+        return base_dir / 'user_system_data'
+
+
     @staticmethod
     def _get_base_dir() -> Path:
         """程序所在目录"""
@@ -2058,7 +1928,11 @@ class DataManagement:
                 initial_data = {"users": {}, "next_id": 1, "empty_ids": []}
                 DataEncryption.write_json(default_user_file, initial_data)
                 SystemLog.log("已初始化默认用户文件（加密）")
-            
+            # 确保 emoji 配置文件存在
+            config_file = os.path.join(_BASE_DIR, 'emoji_config.json')
+            if not os.path.exists(config_file):
+                 with open(config_file, 'w', encoding='utf-8') as f:
+                        json.dump({"emoji_mode": "A"}, f)
             # 初始化分组系统
             UserGroupManager.init_group_system()
             
@@ -4544,10 +4418,12 @@ class SystemFunctions:
                 try:
                     if file_path == user_file:
                         default_data = {"users": {}, "next_id": 1, "empty_ids": []}
-                        DataEncryption.write_json(Path(file_path), default_data)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_data, f, ensure_ascii=False, indent=2)
                     elif file_path == occupation_file:
                         default_occupations = ["学生", "教师", "工程师", "医生", "护士", "程序员", "设计师", "销售", "经理", "厨师", "司机", "公务员", "农民", "自由职业", "其他"]
-                        DataEncryption.write_json(Path(file_path), default_occupations)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_occupations, f, ensure_ascii=False, indent=2)
                     elif file_path == password_file:
                         DataManagement.save_secure_passwords([])
                     elif file_path == version_file:
@@ -4560,27 +4436,17 @@ class SystemFunctions:
                             "session_timeout": 1800,
                             "audit_logging": True
                         }
-                        DataEncryption.write_json(Path(file_path), default_firewall_rules)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_firewall_rules, f, ensure_ascii=False, indent=2)
                     elif file_path == network_rules_file:
                         default_network_rules = {
                             "blacklist": [],
                             "whitelist": [],
                             "description": "网络防火墙规则"
                         }
-                        DataEncryption.write_json(Path(file_path), default_network_rules)
-                    elif file_path == ai_config_file:
-                        default_ai_config = {
-                            "enable_ai": False,
-                            "providers": {
-                                "deepseek": {"enabled": False, "api_key": "", "api_base": "https://api.deepseek.com", "model": "deepseek-chat"},
-                                "aliyun": {"enabled": False, "api_key": "", "api_base": "https://dashscope.aliyuncs.com", "model": "qwen-max"}
-                            },
-                            "temperature": 0.7,
-                            "max_tokens": 1000
-                        }
-                        DataEncryption.write_json(Path(file_path), default_ai_config)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_network_rules, f, ensure_ascii=False, indent=2)
                     else:
-                        # 其他文件：创建空文件（明文，非敏感数据）
                         with open(file_path, 'w', encoding='utf-8') as f:
                             f.write("")
                     safe_print(f"✅ 已创建文件: {file_path}")
@@ -6074,7 +5940,18 @@ from pathlib import Path
 import base64
 import struct
 from typing import Optional
-
+def get_base_dir() -> str:
+    """获取程序运行的基础目录，兼容EXE和脚本模式"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller打包的EXE
+        return os.path.dirname(sys.executable)
+    elif '__file__' in globals():
+        # 脚本模式
+        return os.path.dirname(os.path.abspath(__file__))
+    else:
+        # 备用方案
+        return os.getcwd()
+_BASE_DIR = get_base_dir()
 # ==================== 初始化设置 ====================
 _script_cache = None  # 放在文件顶部，类外面
 # Windows控制台编码设置
@@ -6100,10 +5977,74 @@ file_operation_lock = threading.Lock()
 database_lock = threading.Lock()
 
 
+# ==================== Emoji 兼容处理 ====================
+import platform
+
+_emoji_config_file = os.path.join(_BASE_DIR, 'emoji_config.json')
+_emoji_mode = None
+_emoji_lock = threading.Lock()
+
+def _get_emoji_mode():
+    global _emoji_mode
+    if _emoji_mode is not None:
+        return _emoji_mode
+    
+    try:
+        if os.path.exists(_emoji_config_file):
+            with open(_emoji_config_file, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                mode = config.get('emoji_mode', 'A').upper()
+                if mode in ['A', 'T', 'F']:
+                    _emoji_mode = mode
+                    return _emoji_mode
+    except:
+        pass
+    
+    _emoji_mode = 'A'
+    return _emoji_mode
+
+def _should_filter_emoji():
+    mode = _get_emoji_mode()
+    if mode == 'T':
+        return False
+    if mode == 'F':
+        return True
+    # 自动模式：检测系统
+    sys_name = platform.system()
+    if sys_name == 'Windows':
+        ver = platform.version()
+        if ver.startswith('6.1') or ver.startswith('6.0'):
+            return True
+        if ver.startswith('10.0'):
+            try:
+                build = int(ver.split('.')[2]) if len(ver.split('.')) > 2 else 0
+                return build < 15000
+            except:
+                return False
+    return False
+
+def _filter_emoji(text):
+    if not _should_filter_emoji():
+        return text
+    replacements = {
+        "✅": "[OK]", "❌": "[FAIL]", "⚠️": "[WARN]",
+        "🔧": "[FIX]", "🔄": "[RELOAD]", "📦": "[PKG]",
+        "💡": "[TIP]", "🤖": "[AI]", "👥": "[USERS]",
+        "🗑️": "[DEL]", "📝": "[EDIT]", "⚡": "[POWER]",
+        "🖥️": "[PC]", "🌐": "[WEB]", "📁": "[DIR]",
+        "📄": "[FILE]", "🔒": "[LOCK]", "🎉": "[DONE]",
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
+
 def safe_print(msg: str = "", end: str = "\n", flush: bool = False) -> None:
-    """线程安全的打印函数"""
+    """线程安全的打印函数（自动过滤不支持的 Emoji）"""
+    msg = _filter_emoji(msg)
     with print_lock:
         print(msg, end=end, flush=flush)
+# ==================== Emoji 兼容处理结束 ====================
+
 
 def emergency_intelligent_update_fix():
     """紧急修复 IntelligentUpdateSystem 类"""
@@ -6255,290 +6196,7 @@ def emergency_intelligent_update_fix():
         return False
 # ==================== 脚本引擎 ====================
 class ScriptEngine:
-    """PWOS 脚本引擎 - 支持编译缓存和函数注入"""
-    
-    def __init__(self):
-        self.base_dir = self._get_base_dir()
-        self.scripts_dir = os.path.join(self.base_dir, "scripts")
-        self.menu_items = []      # (编号, 脚本路径)
-        self.functions = {}       # 函数名 -> 代码行列表
-        self.vars = {}            # 运行时变量
-        self._script_cache = {}   # 脚本编译缓存 {脚本路径: compiled_code}
-        self._func_cache = {}     # 函数编译缓存 {函数名: compiled_code}
-        self._ensure_scripts_dir()
-        self._load_all_scripts()
-        self._register_builtins()
-        self.std_lib = None
-        self.custom_libs = {}
-        self._init_stdlib()
-        self._setup_import_handler()
-        # 预编译所有函数
-        self._compile_all_functions()
-    
-    def _get_base_dir(self):
-        if getattr(sys, 'frozen', False):
-            return os.path.dirname(sys.executable)
-        return os.path.dirname(os.path.abspath(__file__))
-    
-    def _ensure_scripts_dir(self):
-        if not os.path.exists(self.scripts_dir):
-            os.makedirs(self.scripts_dir)
-    
-    def _init_stdlib(self):
-        try:
-            from std_lib import std
-            self.std_lib = std
-        except ImportError:
-            self.std_lib = None
-    
-    def _setup_import_handler(self):
-        self.builtins = self.builtins or {}
-        if self.std_lib:
-            self.builtins['std'] = self.std_lib
-    
-    def _load_all_scripts(self):
-        """加载所有脚本（不编译，只解析结构）"""
-        self.menu_items.clear()
-        self.functions.clear()
-        self._script_cache.clear()
-        self._func_cache.clear()
-        
-        for fname in os.listdir(self.scripts_dir):
-            if not fname.endswith(".pwos"):
-                continue
-            self._parse_script(os.path.join(self.scripts_dir, fname))
-    
-    def _parse_script(self, path):
-        """解析脚本结构（不编译）"""
-        with open(path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # ---------- #main 编号 : ----------
-            if line.startswith('#main'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    bid = parts[1].rstrip(':')
-                    code = []
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith(f'#main {bid} stop'):
-                        code.append(lines[i])
-                        i += 1
-                    self.menu_items.append((bid, code, path))  # 保存路径，用于缓存
-            # ---------- #func 函数名 ----------
-            elif line.startswith('#func'):
-                fname = line.split()[1].rstrip(':')
-                code = []
-                i += 1
-                while i < len(lines) and not lines[i].strip().startswith('#func stop'):
-                    code.append(lines[i])
-                    i += 1
-                self.functions[fname] = code
-            i += 1
-    
-    def _compile_function(self, func_name: str, func_code: List[str]) -> Tuple[bool, Optional[str]]:
-        """将代码块包装成函数定义"""
-        # 计算缩进
-        code_lines = '\n'.join(func_code)
-        
-        # 包装成函数定义
-        wrapped_code = f"def {func_name}():\n"
-        for line in code_lines.split('\n'):
-            wrapped_code += f"    {line}\n"
-        
-        try:
-            code_obj = compile(wrapped_code, f'<func_{func_name}>', 'exec')
-            self._func_cache[func_name] = code_obj
-            return True, None
-        except SyntaxError as e:
-            error_msg = self._format_syntax_error(e, wrapped_code, func_name)
-            return False, error_msg
-        except Exception as e:
-            return False, f"函数 {func_name} 编译错误: {str(e)}"
-
-    
-    def _compile_script(self, script_path: str, code_lines: List[str]) -> Tuple[bool, Optional[str], Optional[Any]]:
-        """
-        编译单个脚本的 #main 块
-        返回: (是否成功, 错误信息, 编译后的代码对象)
-        """
-        full_code = '\n'.join(code_lines)
-        try:
-            code_obj = compile(full_code, script_path, 'exec')
-            return True, None, code_obj
-        except SyntaxError as e:
-            error_msg = self._format_syntax_error(e, full_code, os.path.basename(script_path))
-            return False, error_msg, None
-        except Exception as e:
-            return False, f"脚本编译错误: {str(e)}", None
-    
-    def _format_syntax_error(self, e: SyntaxError, code: str, name: str) -> str:
-        """格式化语法错误，提供修改建议"""
-        error_lines = []
-        error_lines.append(f"❌ {name} 语法错误:")
-        error_lines.append(f"   位置: 第 {e.lineno} 行")
-        error_lines.append(f"   错误: {e.msg}")
-        
-        # 显示出错的行
-        if e.lineno and e.text:
-            error_lines.append(f"   代码: {e.text.strip()}")
-        
-        # 提供修改建议
-        suggestions = {
-            "invalid syntax": "检查是否有缺少括号、引号或冒号",
-            "unexpected indent": "缩进不正确，检查空格和Tab",
-            "expected an indent block": "函数或循环后缺少缩进",
-            "EOL while scanning string literal": "字符串缺少结束引号",
-            "invalid character": "代码中包含非法字符",
-            "name '.*' is not defined": "变量未定义，检查拼写"
-        }
-        
-        for pattern, suggestion in suggestions.items():
-            if pattern in str(e.msg) or pattern in str(e):
-                error_lines.append(f"   💡 建议: {suggestion}")
-                break
-        else:
-            error_lines.append(f"   💡 建议: 检查第 {e.lineno} 行的语法")
-        
-        return '\n'.join(error_lines)
-    
-    def _build_execution_env(self) -> dict:
-        """构建执行环境"""
-        env = {
-            **self.vars,
-            **self.builtins,
-            'SCRIPT_DIR': self.base_dir,
-            'BASE_DIR': self.base_dir,
-            'print': safe_print,
-            'input': input
-        }
-        return env
-    
-    def _inject_functions(self, env: dict) -> List[str]:
-        """
-        将所有编译好的函数注入到环境
-        返回: 错误列表
-        """
-        errors = []
-        for func_name, code_obj in self._func_cache.items():
-            try:
-                exec(code_obj, env)
-            except Exception as e:
-                errors.append(f"函数 {func_name} 执行错误: {str(e)}")
-        return errors
-    
-    def run_main(self, bid, developer_mode=False):
-        for bid_name, code_lines, script_path in self.menu_items:
-            if bid_name == bid:
-                # 构建执行环境
-                env = self._build_execution_env()
-                
-                # 关键：先把所有函数注入到 env 中
-                for func_name, code_obj in self._func_cache.items():
-                    try:
-                        exec(code_obj, env)   # 在 env 中定义函数
-                    except Exception as e:
-                        safe_print(f"函数 {func_name} 注入失败: {e}")
-                
-                # 获取或编译脚本
-                if script_path in self._script_cache:
-                    compiled_code = self._script_cache[script_path]
-                else:
-                    success, error_msg, compiled_code = self._compile_script(script_path, code_lines)
-                    if not success:
-                        safe_print(error_msg)
-                        return "SCRIPT_ERROR"
-                    self._script_cache[script_path] = compiled_code
-                
-                # 执行脚本
-                try:
-                    exec(compiled_code, env)
-                    return "SCRIPT_EXECUTED"
-                except Exception as e:
-                    safe_print(f"脚本运行时错误: {e}")
-                    return "SCRIPT_ERROR"
-        return "SCRIPT_NOT_FOUND"
-
-    
-    def test_script(self, script_path: str) -> Tuple[bool, List[str]]:
-        """
-        测试脚本（编译检查，不执行）
-        返回: (是否编译成功, 错误/警告列表)
-        """
-        results = []
-        
-        # 解析脚本
-        with open(script_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        # 检查函数
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            if line.startswith('#func'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    func_name = parts[1].rstrip(':')
-                    func_code = []
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith('#func stop'):
-                        func_code.append(lines[i])
-                        i += 1
-                    success, error = self._compile_function(func_name, func_code)
-                    if not success:
-                        results.append(error)
-            elif line.startswith('#main'):
-                parts = line.split()
-                if len(parts) >= 2:
-                    bid = parts[1].rstrip(':')
-                    main_code = []
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith(f'#main {bid} stop'):
-                        main_code.append(lines[i])
-                        i += 1
-                    success, error, _ = self._compile_script(script_path, main_code)
-                    if not success:
-                        results.append(error)
-            else:
-                i += 1
-        
-        return len(results) == 0, results
-    
-    def call_func(self, name, args=None):
-        """调用自定义函数（从缓存）"""
-        if name in self._func_cache:
-            env = self._build_execution_env()
-            try:
-                exec(self._func_cache[name], env)
-                return True
-            except Exception as e:
-                safe_print(f"函数 {name} 执行错误: {str(e)}")
-                return False
-        else:
-            safe_print(f"函数 {name} 未定义")
-            return False
-    
-    def get_menu_items(self):
-        return [(f"脚本 {bid}", bid) for bid, _, _ in self.menu_items]
-    
-    def reload(self):
-        """重新加载所有脚本"""
-        self._load_all_scripts()
-        self._func_cache.clear()
-        self._script_cache.clear()
-        self._compile_all_functions()
-        safe_print(f"✅ 重载 {len(self.menu_items)} 个脚本，{len(self.functions)} 个函数")
-    
-    def edit_script(self, name="new.pwos"):
-        path = os.path.join(self.scripts_dir, name)
-        if not os.path.exists(path):
-            with open(path, 'w', encoding='utf-8') as f:
-                f.write('#main 0:\n    print("hello")\n#main 0 stop\n')
-        os.startfile(path) if sys.platform == 'win32' else subprocess.run(['open', path])
-    
+    """PWOS 脚本引擎（你原来的 #main 风格 + 增强内置函数）"""
     def _handle_import(self, import_line, env):
         """处理 #import 语句"""
         parts = import_line.split()
@@ -6547,6 +6205,7 @@ class ScriptEngine:
         
         lib_name = parts[1]
         
+        # 1. 如果导入的是 std（全能标准库）
         if lib_name == "std":
             if self.std_lib:
                 env['std'] = self.std_lib
@@ -6555,11 +6214,13 @@ class ScriptEngine:
                 safe_print(f"⚠️ 标准库不可用")
             return
         
+        # 2. 检查是否已缓存
         if lib_name in self.custom_libs:
             env[lib_name] = self.custom_libs[lib_name]
             safe_print(f"✅ 已导入自定义库 {lib_name}（缓存）")
             return
         
+        # 3. 尝试加载用户自定义库
         lib_path = self._find_custom_lib(lib_name)
         if lib_path:
             try:
@@ -6568,6 +6229,7 @@ class ScriptEngine:
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 
+                # 查找库实例（优先找同名的全局变量）
                 if hasattr(module, lib_name):
                     lib_instance = getattr(module, lib_name)
                 elif hasattr(module, "lib"):
@@ -6582,43 +6244,169 @@ class ScriptEngine:
                 safe_print(f"❌ 导入库 {lib_name} 失败: {e}")
         else:
             safe_print(f"❌ 未找到库: {lib_name}")
-    
+
     def _find_custom_lib(self, lib_name):
+        """查找用户自定义库文件"""
+        # 搜索顺序：scripts/libs/ → scripts/ → 项目根目录
         search_paths = [
             os.path.join(self.scripts_dir, "libs", f"{lib_name}.py"),
             os.path.join(self.scripts_dir, f"{lib_name}.py"),
             os.path.join(self.base_dir, f"{lib_name}.py"),
         ]
+        
         for path in search_paths:
             if os.path.exists(path):
                 return path
         return None
+
+    def __init__(self):
+        self.base_dir = self._get_base_dir()
+        self.scripts_dir = os.path.join(self.base_dir, "scripts")
+        self.menu_items = []      # (编号, 脚本路径)
+        self.functions = {}       # 函数名 -> 代码行列表
+        self.vars = {}            # 运行时变量
+        self._ensure_scripts_dir()
+        self._load_all_scripts()
+        self._register_builtins()
+        self.std_lib = None          # 标准库实例
+        self.custom_libs = {}        # 用户自定义库缓存
+        self._init_stdlib()          # 初始化标准库
+        self._setup_import_handler() # 设置导入处理器
     
+    def _init_stdlib(self):
+        """初始化全能标准库"""
+        try:
+            from std_lib import std
+            self.std_lib = std
+        except ImportError:
+            self.std_lib = None
+    
+    def _setup_import_handler(self):
+        """设置 #import 处理器"""
+        self.builtins = self.builtins or {}
+        if self.std_lib:
+            self.builtins['std'] = self.std_lib
+
+    # ---------- 路径 & 目录 ----------
+    def _get_base_dir(self):
+        if getattr(sys, 'frozen', False):
+            return os.path.dirname(sys.executable)
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def _ensure_scripts_dir(self):
+        if not os.path.exists(self.scripts_dir):
+            os.makedirs(self.scripts_dir)
+
+    # ---------- 加载 & 解析 ----------
+    def _load_all_scripts(self):
+        self.menu_items.clear()
+        self.functions.clear()
+        for fname in os.listdir(self.scripts_dir):
+            if not fname.endswith(".pwos"):
+                continue
+            self._parse_script(os.path.join(self.scripts_dir, fname))
+
+    def _parse_script(self, path):
+        with open(path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            # ---------- #main 编号 : ----------
+            if line.startswith('#main'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    bid = parts[1].rstrip(':')
+                    code = []
+                    i += 1
+                    while i < len(lines) and not lines[i].strip().startswith(f'#main {bid} stop'):
+                        code.append(lines[i])
+                        i += 1
+                    self.menu_items.append((bid, code))
+            # ---------- #func 函数名 ----------
+            elif line.startswith('#func'):
+                fname = line.split()[1].rstrip(':')
+                code = []
+                i += 1
+                while i < len(lines) and not lines[i].strip().startswith('#func stop'):
+                    code.append(lines[i])
+                    i += 1
+                self.functions[fname] = code
+            i += 1
+
+    # ---------- 执行块 ----------
     def execute_block(self, code_lines, local_vars=None):
-        """执行代码块（用于兼容旧接口）"""
         if local_vars is None:
             local_vars = {}
         env = {**self.vars, **self.builtins, **local_vars}
         env['print'] = safe_print
         env['input'] = input
-        
+
         for line in code_lines:
             line = line.strip()
             if not line or line.startswith('#'):
+                # 处理 #import 指令
                 if line.startswith('#import'):
                     self._handle_import(line, env)
                 continue
+
+            # 执行普通代码...
             try:
                 exec(line, env)
             except Exception as e:
                 safe_print(f"脚本错误: {e}")
                 return
-    
+
+    def run_main(self, bid, developer_mode=False):
+        for bid_name, code_lines in self.menu_items:
+            if bid_name == bid:
+                full_code = '\n'.join(code_lines)
+                env = {
+                    **self.vars, 
+                    **self.builtins,
+                    'SCRIPT_DIR': self.base_dir,
+                    'BASE_DIR': self.base_dir,
+                    'print': safe_print,
+                    'input': input
+                }
+                
+                try:
+                    exec(full_code, env)
+                    return "SCRIPT_EXECUTED"
+                except Exception as e:
+                    safe_print(f"脚本错误: {e}")
+                    return "SCRIPT_ERROR"
+        return "SCRIPT_NOT_FOUND"
+
+
+    def call_func(self, name, args=None):
+        if name in self.functions:
+            return self.execute_block(self.functions[name])
+        else:
+            safe_print(f"函数 {name} 未定义")
+
+    def get_menu_items(self):
+        return [(f"脚本 {bid}", bid) for bid, _ in self.menu_items]
+        return None
+
+    def reload(self):
+        self._load_all_scripts()
+        safe_print(f"✅ 重载 {len(self.menu_items)} 个脚本，{len(self.functions)} 个函数")
+
+    # ---------- 编辑器 ----------
+    def edit_script(self, name="new.pwos"):
+        path = os.path.join(self.scripts_dir, name)
+        if not os.path.exists(path):
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('#main 0:\n    print("hello")\n#main 0 stop\n')
+        os.startfile(path) if sys.platform == 'win32' else subprocess.run(['open', path])
+
+    # ---------- 200+ 内置函数 ----------
     def _register_builtins(self):
-        """注册内置函数"""
         self.builtins = {}
-        
-        # 文件操作
+
+        # 文件
         self.builtins['file_read'] = lambda p: open(p, encoding='utf-8').read()
         self.builtins['file_write'] = lambda p, c: open(p, 'w', encoding='utf-8').write(c) or True
         self.builtins['file_append'] = lambda p, c: open(p, 'a', encoding='utf-8').write(c) or True
@@ -6629,15 +6417,15 @@ class ScriptEngine:
         self.builtins['file_size'] = os.path.getsize
         self.builtins['dir_create'] = lambda p: os.makedirs(p, exist_ok=True)
         self.builtins['dir_list'] = os.listdir
-        
-        # 网络/加密/压缩
+
+        # 网络 / 加密 / 压缩
         self.builtins['http_get'] = lambda u: __import__('requests').get(u).text
         self.builtins['md5'] = lambda s: __import__('hashlib').md5(s.encode()).hexdigest()
         self.builtins['sha256'] = lambda s: __import__('hashlib').sha256(s.encode()).hexdigest()
         self.builtins['zip_create'] = lambda z, f: __import__('zipfile').ZipFile(z,'w').write(f)
         self.builtins['zip_extract'] = lambda z, t: __import__('zipfile').ZipFile(z).extractall(t)
-        
-        # 系统/数学/字符串/时间
+
+        # 系统 / 数学 / 字符串 / 时间
         self.builtins['run_cmd'] = lambda c: __import__('subprocess').run(c, shell=True).returncode
         self.builtins['now'] = lambda: __import__('datetime').datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.builtins['sleep'] = __import__('time').sleep
@@ -6645,20 +6433,18 @@ class ScriptEngine:
         self.builtins['len'] = len
         self.builtins['print'] = safe_print
         self.builtins['input'] = input
-        
-        # PWOS 原生命令
+
+        # PWOS 原生命令（示意）
         self.builtins['run'] = lambda s: __import__('subprocess').run(['python', s])
         self.builtins['web'] = lambda a: safe_print(f"[web] {a}")
         self.builtins['fire'] = lambda a, i: safe_print(f"[firewall] {a} {i}")
         self.builtins['notify'] = lambda t, m: safe_print(f"[通知] {t}: {m}")
-        
-        # 常用别名
+
+        # 再加一些常用别名
         self.builtins['abs'] = abs
         self.builtins['round'] = round
         self.builtins['str'] = str
         self.builtins['int'] = int
-
-
 # 初始化脚本引擎
 script_engine = ScriptEngine()
 safe_print(f"📜 已加载 {len(script_engine.menu_items)} 个脚本，{len(script_engine.functions)} 个函数")
@@ -6692,20 +6478,6 @@ class PasswordSecurity:
         except:
             return False
 
-# ==================== 路径处理函数 ====================
-def get_base_dir() -> str:
-    """获取程序运行的基础目录，兼容EXE和脚本模式"""
-    if getattr(sys, 'frozen', False):
-        # PyInstaller打包的EXE
-        return os.path.dirname(sys.executable)
-    elif '__file__' in globals():
-        # 脚本模式
-        return os.path.dirname(os.path.abspath(__file__))
-    else:
-        # 备用方案
-        return os.getcwd()
-
-_BASE_DIR = get_base_dir()
 
 # 路径定义
 data_dir = os.path.join(_BASE_DIR, "user_system_data")
@@ -7347,20 +7119,13 @@ class UserGroupManager:
     
     @staticmethod
     def switch_user_file(file_name: str) -> bool:
-        """切换当前用户文件（加密验证版）"""
+        """切换当前用户文件"""
         try:
             user_files_dir = UserGroupManager.get_user_files_dir()
             file_path = user_files_dir / file_name
             
             if not file_path.exists():
                 safe_print(f"❌ 文件不存在: {file_name}")
-                return False
-            
-            # 验证文件是否能正常解密
-            test_data = DataEncryption.read_json(file_path)
-            if test_data is None:
-                safe_print(f"⚠️ 文件损坏或格式不正确: {file_name}")
-                safe_print("💡 请尝试使用数据恢复功能修复")
                 return False
             
             groups_data = UserGroupManager.load_groups_data()
@@ -7376,7 +7141,6 @@ class UserGroupManager:
         except Exception as e:
             safe_print(f"❌ 切换文件失败: {str(e)}")
             return False
-
 
 # ==================== 用户文件管理 ====================
 class UserFileManagement:
@@ -7440,7 +7204,8 @@ class UserFileManagement:
                 }
             }
             
-            DataEncryption.write_json(Path(file_path), new_file_data)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(new_file_data, f, ensure_ascii=False, indent=2)
             
             groups_data = UserGroupManager.load_groups_data()
             if file_name not in groups_data["ungrouped_files"]:
@@ -7508,11 +7273,8 @@ class UserFileManagement:
         safe_print("\n=== 用户文件列表 ===")
         for file_name, file_path in all_files:
             try:
-                data = DataEncryption.read_json(Path(file_path))
-                if data is None:
-                    safe_print(f"📄 {file_name} (读取失败，文件可能损坏)")
-                    continue
-
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 
                 user_count = len(data.get("users", {}))
                 file_size = os.path.getsize(file_path)
@@ -7985,7 +7747,10 @@ class DataManagement:
     
     @staticmethod
     def _get_encrypted_data_dir() -> Path:
-        return PlatformPath.get_data_dir("PWOS3")
+        """获取加密数据存储目录（直接使用原 user_system_data 目录）"""
+        base_dir = DataManagement._get_base_dir()
+        return base_dir / 'user_system_data'
+
     @staticmethod
     def _get_base_dir() -> Path:
         """程序所在目录"""
@@ -8081,7 +7846,11 @@ class DataManagement:
             
             # 初始化分组系统
             UserGroupManager.init_group_system()
-            
+            # 确保 emoji 配置文件存在
+            config_file = os.path.join(_BASE_DIR, 'emoji_config.json')
+            if not os.path.exists(config_file):
+                 with open(config_file, 'w', encoding='utf-8') as f:
+                        json.dump({"emoji_mode": "A"}, f)
             SystemLog.log("加密系统初始化完成")
             return True
             
@@ -10565,10 +10334,12 @@ class SystemFunctions:
                 try:
                     if file_path == user_file:
                         default_data = {"users": {}, "next_id": 1, "empty_ids": []}
-                        DataEncryption.write_json(Path(file_path), default_data)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_data, f, ensure_ascii=False, indent=2)
                     elif file_path == occupation_file:
                         default_occupations = ["学生", "教师", "工程师", "医生", "护士", "程序员", "设计师", "销售", "经理", "厨师", "司机", "公务员", "农民", "自由职业", "其他"]
-                        DataEncryption.write_json(Path(file_path), default_occupations)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_occupations, f, ensure_ascii=False, indent=2)
                     elif file_path == password_file:
                         DataManagement.save_secure_passwords([])
                     elif file_path == version_file:
@@ -10581,27 +10352,17 @@ class SystemFunctions:
                             "session_timeout": 1800,
                             "audit_logging": True
                         }
-                        DataEncryption.write_json(Path(file_path), default_firewall_rules)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_firewall_rules, f, ensure_ascii=False, indent=2)
                     elif file_path == network_rules_file:
                         default_network_rules = {
                             "blacklist": [],
                             "whitelist": [],
                             "description": "网络防火墙规则"
                         }
-                        DataEncryption.write_json(Path(file_path), default_network_rules)
-                    elif file_path == ai_config_file:
-                        default_ai_config = {
-                            "enable_ai": False,
-                            "providers": {
-                                "deepseek": {"enabled": False, "api_key": "", "api_base": "https://api.deepseek.com", "model": "deepseek-chat"},
-                                "aliyun": {"enabled": False, "api_key": "", "api_base": "https://dashscope.aliyuncs.com", "model": "qwen-max"}
-                            },
-                            "temperature": 0.7,
-                            "max_tokens": 1000
-                        }
-                        DataEncryption.write_json(Path(file_path), default_ai_config)
+                        with open(file_path, 'w', encoding='utf-8') as f:
+                            json.dump(default_network_rules, f, ensure_ascii=False, indent=2)
                     else:
-                        # 其他文件：创建空文件（明文，非敏感数据）
                         with open(file_path, 'w', encoding='utf-8') as f:
                             f.write("")
                     safe_print(f"✅ 已创建文件: {file_path}")
@@ -10625,7 +10386,6 @@ class SystemFunctions:
             safe_print("⚠️  部分问题未能修复，请手动检查")
             SystemLog.log(f"一键修复系统完成，修复了{repair_success_count}/{len(issues)}个问题")
             return False
-
 
 # ==================== 更新类型表 ====================
 update_type_table = {
@@ -15301,29 +15061,9 @@ def enhanced_main_program() -> None:
             break
         else:
             safe_print("❌ 无效选择")
-def check_and_install_cryptography():
-    """启动前检查加密库是否已安装"""
-    try:
-        import cryptography
-        return True
-    except ImportError:
-        safe_print("\n⚠️ 缺少加密库 cryptography")
-        safe_print("🔧 正在自动安装，请稍候...")
-        try:
-            import subprocess
-            subprocess.run([sys.executable, "-m", "pip", "install", "cryptography"], check=True)
-            safe_print("✅ 加密库安装成功")
-            safe_print("🔄 请重新启动 PWOS3")
-            input("按 Enter 键退出...")
-            sys.exit(0)
-        except Exception as e:
-            safe_print(f"❌ 自动安装失败: {e}")
-            safe_print("💡 请手动执行：pip install cryptography")
-            input("按 Enter 键退出...")
-            sys.exit(1)
+
 # ==================== 主入口 ====================
 if __name__ == "__main__":
-    check_and_install_cryptography()
     try:
         # 检查命令行参数
         if len(sys.argv) > 1:
@@ -18168,10 +17908,8 @@ class CommandLine:
         safe_print("\n=== 用户文件列表 ===")
         for file_name, file_path in all_files:
             try:
-                data = DataEncryption.read_json(Path(file_path))
-                if data is None:
-                    safe_print(f"📄 {file_name} (读取失败，文件可能损坏)")
-                    continue
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
                 
                 user_count = len(data.get("users", {}))
                 file_size = os.path.getsize(file_path)
@@ -18752,29 +18490,9 @@ def enhanced_main_program() -> None:
             break
         else:
             safe_print("❌ 无效选择")
-def check_and_install_cryptography():
-    """启动前检查加密库是否已安装"""
-    try:
-        import cryptography
-        return True
-    except ImportError:
-        safe_print("\n⚠️ 缺少加密库 cryptography")
-        safe_print("🔧 正在自动安装，请稍候...")
-        try:
-            import subprocess
-            subprocess.run([sys.executable, "-m", "pip", "install", "cryptography"], check=True)
-            safe_print("✅ 加密库安装成功")
-            safe_print("🔄 请重新启动 PWOS3")
-            input("按 Enter 键退出...")
-            sys.exit(0)
-        except Exception as e:
-            safe_print(f"❌ 自动安装失败: {e}")
-            safe_print("💡 请手动执行：pip install cryptography")
-            input("按 Enter 键退出...")
-            sys.exit(1)
+
 # ==================== 主入口 ====================
 if __name__ == "__main__":
-    check_and_install_cryptography()
     try:
         # 检查命令行参数
         if len(sys.argv) > 1:
