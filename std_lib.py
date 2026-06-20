@@ -12,11 +12,15 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 # ==================== std_lib.py - PWOS3 超级增强标准库 ====================
-# 版本: 4.0 - 终极增强版
-# 新增功能: ThreadPool, Cache, Retry, RingBuffer, Stopwatch, LRU, EventBus, 
-#          ObjectPool, Lazy, CsvReader, IniConfig, SortedSet, Batched, 
-#          Profiler, Zip, Tee, Observer, Semaphore, MemoryPool, BitField
+# 版本: 4.1 - 完整硬件控制版
+# 包含: 基础类型、容器、算法、网络、加密、表格、进度条、配置、日志
+#       + 完整 IO 硬件控制 (GPIO/I2C/SPI/UART/USB/PCIe/CSI/DSI/传感器/电机/AI)
+#       + BFS/图论扩展
+#       + ThreadPool, Cache, Retry, RingBuffer, Stopwatch, LRU, EventBus
+#       + ObjectPool, Lazy, CsvReader, IniConfig, SortedSet, Batched
+#       + Profiler, Zip, Tee, Observer, Semaphore, MemoryPool, BitField
 
 import os, sys, json, time, random, hashlib, datetime, shutil, zipfile, tarfile
 import re, base64, csv, sqlite3, subprocess, socket, platform, math, textwrap
@@ -30,6 +34,60 @@ from functools import wraps, partial, reduce, lru_cache
 from contextlib import contextmanager
 import traceback
 import uuid as _uuid
+
+# ==================== 硬件控制导入 ====================
+try:
+    import RPi.GPIO as _RPi_GPIO
+    _HAS_RPI_GPIO = True
+except ImportError:
+    _HAS_RPI_GPIO = False
+
+try:
+    import smbus2 as _smbus
+    _HAS_SMBUS = True
+except ImportError:
+    try:
+        import smbus as _smbus
+        _HAS_SMBUS = True
+    except ImportError:
+        _HAS_SMBUS = False
+
+try:
+    import spidev as _spidev
+    _HAS_SPIDEV = True
+except ImportError:
+    _HAS_SPIDEV = False
+
+try:
+    import serial as _serial
+    _HAS_SERIAL = True
+except ImportError:
+    _HAS_SERIAL = False
+
+try:
+    import usb.core as _usb_core
+    import usb.util as _usb_util
+    _HAS_PYUSB = True
+except ImportError:
+    _HAS_PYUSB = False
+
+try:
+    import picamera as _picamera
+    _HAS_PICAMERA = True
+except ImportError:
+    _HAS_PICAMERA = False
+
+try:
+    import cv2 as _cv2
+    _HAS_OPENCV = True
+except ImportError:
+    _HAS_OPENCV = False
+
+try:
+    import torch as _torch
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 
 # ==================== 1. 基础类型增强 ====================
 
@@ -589,7 +647,7 @@ class Tuple:
     def __iter__(self):
         return iter(self._data)
 
-# ==================== 3. 算法库增强 ====================
+# ==================== 3. 算法库 ====================
 
 class Algo:
     @staticmethod
@@ -772,7 +830,7 @@ class Algo:
         false_list = [x for x in data if not predicate(x)]
         return true_list, false_list
 
-# ==================== 4. Range 类 ====================
+# ==================== 4. Range ====================
 
 class Range:
     def __init__(self, start, end=None, step=1):
@@ -820,7 +878,7 @@ class Range2D:
             for y in self.y_range:
                 yield x, y
 
-# ==================== 5. JSON 增强 ====================
+# ==================== 5. JSON ====================
 
 class JSON:
     @staticmethod
@@ -842,12 +900,12 @@ class JSON:
     def pretty_print(obj):
         print(json.dumps(obj, ensure_ascii=False, indent=2))
 
-# ==================== 6. HTTP 客户端 ====================
+# ==================== 6. HTTP ====================
 
 class HTTP:
     @staticmethod
     def get(url, headers=None, timeout=30):
-        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/4.0'})
+        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/4.1'})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode('utf-8')
     @staticmethod
@@ -867,7 +925,7 @@ class HTTP:
         urllib.request.urlretrieve(url, save_path)
         return True
 
-# ==================== 7. 加密工具 ====================
+# ==================== 7. 加密 ====================
 
 class Crypto:
     @staticmethod
@@ -892,7 +950,7 @@ class Crypto:
     def random_string(length=8):
         return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
 
-# ==================== 8. 表格美化 ====================
+# ==================== 8. 表格 ====================
 
 class Table:
     def __init__(self, headers=None):
@@ -961,7 +1019,7 @@ class ProgressBar:
     def reset(self):
         self.current = 0
 
-# ==================== 10. 配置管理 ====================
+# ==================== 10. 配置 ====================
 
 class Config:
     def __init__(self, filepath=None):
@@ -1006,7 +1064,7 @@ class Config:
     def all(self):
         return self._config.copy()
 
-# ==================== 11. 日志工具 ====================
+# ==================== 11. 日志 ====================
 
 class Logger:
     LEVELS = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3}
@@ -1500,7 +1558,7 @@ class Template:
     def swap(a, b):
         return b, a
 
-# ==================== 13. 文件工具类（增强） ====================
+# ==================== 13. 文件 ====================
 
 class File:
     @staticmethod
@@ -1623,7 +1681,7 @@ class File:
             result.append((root, dirs, files))
         return result
 
-# ==================== 14. 字符串工具类 ====================
+# ==================== 14. 字符串 ====================
 
 class String:
     @staticmethod
@@ -1671,13 +1729,13 @@ class String:
         pattern = r'^1[3-9]\d{9}$'
         return re.match(pattern, s) is not None
 
-# ==================== 15. 网络工具类 ====================
+# ==================== 15. 网络 ====================
 
 class Network:
     @staticmethod
     def get(url, timeout=30):
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/4.0'})
+            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/4.1'})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode('utf-8')
         except:
@@ -1722,7 +1780,7 @@ class Network:
                 ips.append(ip)
         return ips
 
-# ==================== 16. 数学工具类 ====================
+# ==================== 16. 数学 ====================
 
 class MathUtil:
     @staticmethod
@@ -1779,7 +1837,7 @@ class MathUtil:
                 return False
         return True
 
-# ==================== 17. 时间日期工具类 ====================
+# ==================== 17. 时间日期 ====================
 
 class TimeDate:
     @staticmethod
@@ -1803,7 +1861,7 @@ class TimeDate:
         dt = datetime.datetime.strptime(date_str, fmt)
         return (dt + datetime.timedelta(days=days)).strftime(fmt)
 
-# ==================== 18. 随机工具类 ====================
+# ==================== 18. 随机 ====================
 
 class RandomUtil:
     @staticmethod
@@ -1834,7 +1892,7 @@ class RandomUtil:
     def uuid():
         return str(_uuid.uuid4())
 
-# ==================== 19. 颜色工具类 ====================
+# ==================== 19. 颜色 ====================
 
 class Color:
     @staticmethod
@@ -1904,7 +1962,7 @@ class Color:
     def info(text):
         return f"\033[96;1m[INFO] {text}\033[0m"
 
-# ==================== 20. 系统信息类 ====================
+# ==================== 20. 系统信息 ====================
 
 class SystemInfo:
     @staticmethod
@@ -1944,7 +2002,7 @@ class SystemInfo:
     def is_macos() -> bool:
         return platform.system() == "Darwin"
 
-# ==================== 21. 实用工具类 ====================
+# ==================== 21. 实用工具 ====================
 
 class Utils:
     @staticmethod
@@ -1990,21 +2048,16 @@ class Utils:
         seen = set()
         return [x for x in lst if not (x in seen or seen.add(x))]
 
-# ==================== BFS/图论扩展模块 ====================
+# ==================== BFS/图论 ====================
 
 class GraphAlgo:
-    """图论算法扩展模块"""
-    
     @staticmethod
     def bfs_graph(graph, start, target, o=False):
-        """图结构 BFS"""
         from collections import deque
         start_time = time.time()
-        
         queue = deque([(start, [start])])
         visited = {start}
         visited_count = 1
-        
         while queue:
             node, path = queue.popleft()
             if node == target:
@@ -2017,7 +2070,6 @@ class GraphAlgo:
                     visited.add(neighbor)
                     visited_count += 1
                     queue.append((neighbor, path + [neighbor]))
-        
         elapsed_ms = (time.time() - start_time) * 1000
         if o:
             return [], elapsed_ms, visited_count
@@ -2025,10 +2077,8 @@ class GraphAlgo:
     
     @staticmethod
     def bfs_grid(grid, start, target_value, o=False):
-        """网格 BFS"""
         from collections import deque
         start_time = time.time()
-        
         target = None
         for i in range(len(grid)):
             for j in range(len(grid[0])):
@@ -2037,18 +2087,15 @@ class GraphAlgo:
                     break
             if target:
                 break
-        
         if not target:
             if o:
                 return [], 0, 0
             return []
-        
         sx, sy = start
         queue = deque([(sx, sy, [(sx, sy)])])
         visited = {(sx, sy)}
         visited_count = 1
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-        
         while queue:
             cx, cy, path = queue.popleft()
             if (cx, cy) == target:
@@ -2063,32 +2110,26 @@ class GraphAlgo:
                         visited.add((nx, ny))
                         visited_count += 1
                         queue.append((nx, ny, path + [(nx, ny)]))
-        
         if o:
             return [], (time.time() - start_time) * 1000, visited_count
         return []
     
     @staticmethod
     def bfs_shortest_distance(graph, start, target):
-        """获取最短路径长度"""
         path = GraphAlgo.bfs_graph(graph, start, target)
         return len(path) - 1 if path else -1
     
     @staticmethod
     def has_path(graph, start, target):
-        """判断是否存在路径"""
         path = GraphAlgo.bfs_graph(graph, start, target)
         return len(path) > 0
     
     @staticmethod
     def dfs(graph, start, target, o=False):
-        """深度优先搜索"""
         start_time = time.time()
-        
         stack = [(start, [start])]
         visited = {start}
         visited_count = 1
-        
         while stack:
             node, path = stack.pop()
             if node == target:
@@ -2101,7 +2142,6 @@ class GraphAlgo:
                     visited.add(neighbor)
                     visited_count += 1
                     stack.append((neighbor, path + [neighbor]))
-        
         elapsed_ms = (time.time() - start_time) * 1000
         if o:
             return [], elapsed_ms, visited_count
@@ -2109,14 +2149,11 @@ class GraphAlgo:
     
     @staticmethod
     def dijkstra(graph, start, target, o=False):
-        """Dijkstra 最短路径（带权重）"""
         import heapq
         start_time = time.time()
-        
         pq = [(0, start, [start])]
         distances = {start: 0}
         visited_count = 1
-        
         while pq:
             dist, node, path = heapq.heappop(pq)
             if node == target:
@@ -2132,7 +2169,6 @@ class GraphAlgo:
                     distances[neighbor] = new_dist
                     visited_count += 1
                     heapq.heappush(pq, (new_dist, neighbor, path + [neighbor]))
-        
         elapsed_ms = (time.time() - start_time) * 1000
         if o:
             return [], -1, elapsed_ms, visited_count
@@ -2140,10 +2176,8 @@ class GraphAlgo:
     
     @staticmethod
     def has_cycle(graph):
-        """检测图中是否有环"""
         visited = set()
         rec_stack = set()
-        
         def dfs(node):
             visited.add(node)
             rec_stack.add(node)
@@ -2155,7 +2189,6 @@ class GraphAlgo:
                     return True
             rec_stack.remove(node)
             return False
-        
         for node in graph:
             if node not in visited:
                 if dfs(node):
@@ -2164,16 +2197,13 @@ class GraphAlgo:
     
     @staticmethod
     def topological_sort(graph):
-        """拓扑排序"""
         from collections import deque
         in_degree = {node: 0 for node in graph}
         for node in graph:
             for neighbor in graph[node]:
                 in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
-        
         queue = deque([node for node in graph if in_degree[node] == 0])
         result = []
-        
         while queue:
             node = queue.popleft()
             result.append(node)
@@ -2181,12 +2211,10 @@ class GraphAlgo:
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
-        
         return result if len(result) == len(graph) else []
 
-# ==================== 22. ========== 新增功能模块 ========== ====================
+# ==================== 22. 新增功能 ====================
 
-# 22.1 ThreadPool - 线程池轻量封装
 class ThreadPool:
     def __init__(self, max_workers=None):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
@@ -2201,20 +2229,19 @@ class ThreadPool:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.shutdown()
 
-# 22.2 Cache - LRU/LFU 缓存，支持 TTL
 class Cache:
     def __init__(self, maxsize=128, ttl=None, policy='lru'):
         self.maxsize = maxsize
         self.ttl = ttl
-        self.policy = policy  # 'lru' or 'lfu'
+        self.policy = policy
         self._cache = {}
-        self._usage = {}  # for lru: timestamp, for lfu: frequency
+        self._usage = {}
     def _evict(self):
         if len(self._cache) < self.maxsize:
             return
         if self.policy == 'lru':
             key = min(self._usage.keys(), key=lambda k: self._usage[k])
-        else:  # lfu
+        else:
             key = min(self._usage.keys(), key=lambda k: self._usage[k])
         if key in self._cache:
             del self._cache[key]
@@ -2244,7 +2271,6 @@ class Cache:
     def size(self):
         return len(self._cache)
 
-# 22.3 Retry - 重试装饰器，指数退避
 def retry(max_attempts=3, delay=1, backoff=2, exceptions=(Exception,)):
     def decorator(func):
         @wraps(func)
@@ -2262,7 +2288,6 @@ def retry(max_attempts=3, delay=1, backoff=2, exceptions=(Exception,)):
         return wrapper
     return decorator
 
-# 22.4 RingBuffer - 循环队列
 class RingBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -2299,7 +2324,6 @@ class RingBuffer:
     def full(self):
         return self._size == self.capacity
 
-# 22.5 Stopwatch - 高精度计时器
 class Stopwatch:
     def __init__(self):
         self._start = None
@@ -2329,7 +2353,6 @@ class Stopwatch:
     def elapsed_us(self):
         return self.elapsed() * 1000000
 
-# 22.6 Lazy - 延迟求值
 class Lazy:
     def __init__(self, func):
         self._func = func
@@ -2346,7 +2369,6 @@ class Lazy:
         self._evaluated = False
         self._value = None
 
-# 22.7 CsvReader / CsvWriter
 class CsvReader:
     def __init__(self, filepath, delimiter=','):
         self.filepath = filepath
@@ -2380,7 +2402,6 @@ class CsvWriter:
     def writerows(self, rows):
         self._writer.writerows(rows)
 
-# 22.8 IniConfig - 轻量级 INI 读写
 class IniConfig:
     def __init__(self, filepath=None):
         self.filepath = filepath
@@ -2416,7 +2437,6 @@ class IniConfig:
             with open(path, 'w', encoding='utf-8') as f:
                 self._config.write(f)
 
-# 22.9 SortedSet - 有序集合
 class SortedSet:
     def __init__(self, iterable=None, key=None):
         self._data = []
@@ -2458,7 +2478,6 @@ class SortedSet:
     def to_list(self):
         return self._data.copy()
 
-# 22.10 Batched - 批量处理迭代器
 def Batched(iterable, size):
     it = iter(iterable)
     while True:
@@ -2467,7 +2486,6 @@ def Batched(iterable, size):
             break
         yield batch
 
-# 22.11 Profiler - 上下文管理器性能分析
 class Profiler:
     def __init__(self, name="block"):
         self.name = name
@@ -2481,7 +2499,6 @@ class Profiler:
     def elapsed_ms(self):
         return self._sw.elapsed_ms()
 
-# 22.12 Zip - 并行迭代器（支持不等长，填充默认值）
 def Zip(*iterables, fill=None):
     iters = [iter(it) for it in iterables]
     while True:
@@ -2495,12 +2512,10 @@ def Zip(*iterables, fill=None):
             break
         yield tuple(result)
 
-# 22.13 Tee - 复制流（将迭代器分叉成多个）
 def Tee(iterator, n=2):
     from itertools import tee
     return tee(iterator, n)
 
-# 22.14 Observer - 观察者模式事件总线
 class EventBus:
     def __init__(self):
         self._listeners = defaultdict(list)
@@ -2518,7 +2533,6 @@ class EventBus:
         else:
             self._listeners.clear()
 
-# 22.15 Semaphore - 信号量
 class Semaphore:
     def __init__(self, value=1):
         self._sem = threading.Semaphore(value)
@@ -2532,7 +2546,6 @@ class Semaphore:
     def __exit__(self, *args):
         self.release()
 
-# 22.16 MemoryPool - 内存池
 class MemoryPool:
     def __init__(self, object_type, capacity=100):
         self.object_type = object_type
@@ -2554,7 +2567,6 @@ class MemoryPool:
     def allocated_count(self):
         return self._allocated
 
-# 22.17 BitField - 位域读写
 class BitField:
     def __init__(self, value=0, bits=32):
         self._value = value & ((1 << bits) - 1)
@@ -2577,6 +2589,486 @@ class BitField:
         return bin(self._value)[2:].zfill(self._bits)
     def __int__(self):
         return self._value
+
+# ==================== 23. IO 硬件控制 (完整版) ====================
+
+class IOPortType:
+    """端口类型枚举 - 覆盖所有已知接口"""
+    # GPIO
+    GPIO = "gpio"
+    GPIO_BCM = "gpio_bcm"
+    GPIO_WIRING = "gpio_wiring"
+    GPIO_SYSFS = "gpio_sysfs"
+    
+    # I2C
+    I2C = "i2c"
+    I2C_SMBUS = "i2c_smbus"
+    I2C_DEV = "i2c_dev"
+    
+    # SPI
+    SPI = "spi"
+    SPI_DEV = "spi_dev"
+    
+    # UART
+    UART = "uart"
+    UART_TTY = "uart_tty"
+    UART_USB = "uart_usb"
+    
+    # USB
+    USB = "usb"
+    USB_HOST = "usb_host"
+    USB_OTG = "usb_otg"
+    USB_DEVICE = "usb_device"
+    
+    # PCIe
+    PCIE = "pcie"
+    PCIE_X1 = "pcie_x1"
+    PCIE_X4 = "pcie_x4"
+    PCIE_X8 = "pcie_x8"
+    PCIE_X16 = "pcie_x16"
+    PCIE_MINI = "pcie_mini"
+    PCIE_M2 = "pcie_m2"
+    
+    # 摄像头
+    CSI = "csi"
+    CSI_0 = "csi0"
+    CSI_1 = "csi1"
+    CSI_2 = "csi2"
+    USB_CAM = "usb_cam"
+    IP_CAM = "ip_cam"
+    HDMI_CAM = "hdmi_cam"
+    
+    # 显示
+    DSI = "dsi"
+    HDMI = "hdmi"
+    DP = "dp"
+    VGA = "vga"
+    LVDS = "lvds"
+    EDP = "edp"
+    
+    # 音频
+    AUDIO = "audio"
+    AUDIO_HDMI = "audio_hdmi"
+    AUDIO_USB = "audio_usb"
+    AUDIO_I2S = "audio_i2s"
+    AUDIO_PCM = "audio_pcm"
+    
+    # 存储
+    STORAGE = "storage"
+    SATA = "sata"
+    NVME = "nvme"
+    EMMC = "emmc"
+    SDIO = "sdio"
+    SDMMC = "sdmmc"
+    
+    # AI 加速
+    AI = "ai"
+    AI_PCIE = "ai_pcie"
+    AI_USB = "ai_usb"
+    AI_M2 = "ai_m2"
+    AI_NPU = "ai_npu"
+    AI_TPU = "ai_tpu"
+    AI_CORAL = "ai_coral"
+    
+    # 网络
+    ETH = "eth"
+    WIFI = "wifi"
+    BT = "bt"
+    LTE = "lte"
+    CAN = "can"
+    RS485 = "rs485"
+    RS232 = "rs232"
+    
+    # 传感器
+    SENSOR = "sensor"
+    SENSOR_I2C = "sensor_i2c"
+    SENSOR_SPI = "sensor_spi"
+    SENSOR_GPIO = "sensor_gpio"
+    SENSOR_ANALOG = "sensor_analog"
+    
+    # 电机
+    MOTOR = "motor"
+    SERVO = "servo"
+    STEPPER = "stepper"
+    DC_MOTOR = "dc_motor"
+    BRUSHLESS = "brushless"
+    
+    # 开发板专用
+    JETSON_GPIO = "jetson_gpio"
+    JETSON_CAM = "jetson_cam"
+    ORANGE_PI_GPIO = "orange_gpio"
+    ROCKCHIP_GPIO = "rockchip_gpio"
+    ALLWINNER_GPIO = "allwinner_gpio"
+    BANANA_PI_GPIO = "banana_pi_gpio"
+    
+    # ESP32/Arduino
+    ESP32_UART = "esp32_uart"
+    ESP32_SPI = "esp32_spi"
+    ESP32_I2C = "esp32_i2c"
+    ARDUINO_UART = "arduino_uart"
+    ARDUINO_I2C = "arduino_i2c"
+    ARDUINO_SPI = "arduino_spi"
+    
+    # 虚拟
+    VIRTUAL = "virtual"
+    SIMULATOR = "simulator"
+    DEBUG = "debug"
+    UNKNOWN = "unknown"
+
+class _PortAlias:
+    """端口别名映射"""
+    ALIASES = {
+        # GPIO
+        "gpio": IOPortType.GPIO, "gpio0": IOPortType.GPIO, "gpio1": IOPortType.GPIO,
+        "gpio_bcm": IOPortType.GPIO_BCM, "bcm": IOPortType.GPIO_BCM,
+        "gpio_wiring": IOPortType.GPIO_WIRING, "wiring": IOPortType.GPIO_WIRING,
+        "gpio_sysfs": IOPortType.GPIO_SYSFS, "sysfs": IOPortType.GPIO_SYSFS,
+        # I2C
+        "i2c": IOPortType.I2C, "i2c0": IOPortType.I2C, "i2c1": IOPortType.I2C,
+        "i2c_smbus": IOPortType.I2C_SMBUS, "smbus": IOPortType.I2C_SMBUS,
+        "i2c_dev": IOPortType.I2C_DEV,
+        # SPI
+        "spi": IOPortType.SPI, "spi0": IOPortType.SPI, "spi1": IOPortType.SPI,
+        "spi_dev": IOPortType.SPI_DEV,
+        # UART
+        "uart": IOPortType.UART, "uart0": IOPortType.UART, "uart1": IOPortType.UART,
+        "tty": IOPortType.UART_TTY, "ttyAMA": IOPortType.UART_TTY,
+        "ttyS": IOPortType.UART_TTY, "ttyUSB": IOPortType.UART_USB,
+        # USB
+        "usb": IOPortType.USB, "usb0": IOPortType.USB, "usb1": IOPortType.USB,
+        "usb2": IOPortType.USB, "usb3": IOPortType.USB,
+        "usb_host": IOPortType.USB_HOST, "usb_otg": IOPortType.USB_OTG,
+        "usb_device": IOPortType.USB_DEVICE,
+        # PCIe
+        "pcie": IOPortType.PCIE, "pcie0": IOPortType.PCIE, "pcie1": IOPortType.PCIE,
+        "pcie_x1": IOPortType.PCIE_X1, "pcie_x4": IOPortType.PCIE_X4,
+        "pcie_x8": IOPortType.PCIE_X8, "pcie_x16": IOPortType.PCIE_X16,
+        "pcie_mini": IOPortType.PCIE_MINI, "mini_pcie": IOPortType.PCIE_MINI,
+        "pcie_m2": IOPortType.PCIE_M2, "m2": IOPortType.PCIE_M2, "m.2": IOPortType.PCIE_M2,
+        # 摄像头
+        "csi": IOPortType.CSI, "csi0": IOPortType.CSI_0, "csi1": IOPortType.CSI_1,
+        "csi2": IOPortType.CSI_2, "camera": IOPortType.CSI, "cam": IOPortType.CSI,
+        "cam0": IOPortType.CSI_0, "cam1": IOPortType.CSI_1,
+        "usb_cam": IOPortType.USB_CAM, "usbcam": IOPortType.USB_CAM,
+        "ip_cam": IOPortType.IP_CAM, "ipcam": IOPortType.IP_CAM,
+        "hdmi_cam": IOPortType.HDMI_CAM, "hdmicam": IOPortType.HDMI_CAM,
+        # 显示
+        "dsi": IOPortType.DSI, "dsi0": IOPortType.DSI, "display": IOPortType.DSI,
+        "hdmi": IOPortType.HDMI, "hdmi0": IOPortType.HDMI, "hdmi1": IOPortType.HDMI,
+        "dp": IOPortType.DP, "dp0": IOPortType.DP,
+        "vga": IOPortType.VGA, "lvds": IOPortType.LVDS, "edp": IOPortType.EDP,
+        # 音频
+        "audio": IOPortType.AUDIO, "audio0": IOPortType.AUDIO,
+        "hdmi_audio": IOPortType.AUDIO_HDMI, "usb_audio": IOPortType.AUDIO_USB,
+        "i2s": IOPortType.AUDIO_I2S, "pcm": IOPortType.AUDIO_PCM,
+        # 存储
+        "storage": IOPortType.STORAGE, "sata": IOPortType.SATA,
+        "nvme": IOPortType.NVME, "emmc": IOPortType.EMMC,
+        "sdio": IOPortType.SDIO, "sdmmc": IOPortType.SDMMC,
+        # AI
+        "ai": IOPortType.AI, "ai0": IOPortType.AI,
+        "ai_pcie": IOPortType.AI_PCIE, "ai_usb": IOPortType.AI_USB,
+        "ai_m2": IOPortType.AI_M2, "npu": IOPortType.AI_NPU,
+        "tpu": IOPortType.AI_TPU, "coral": IOPortType.AI_CORAL,
+        "edge_tpu": IOPortType.AI_CORAL,
+        # 网络
+        "eth": IOPortType.ETH, "eth0": IOPortType.ETH, "ethernet": IOPortType.ETH,
+        "wifi": IOPortType.WIFI, "wlan": IOPortType.WIFI, "wlan0": IOPortType.WIFI,
+        "bt": IOPortType.BT, "bluetooth": IOPortType.BT,
+        "lte": IOPortType.LTE, "4g": IOPortType.LTE, "5g": IOPortType.LTE,
+        "can": IOPortType.CAN, "can0": IOPortType.CAN,
+        "rs485": IOPortType.RS485, "rs232": IOPortType.RS232,
+        # 传感器
+        "sensor": IOPortType.SENSOR,
+        "sensor_i2c": IOPortType.SENSOR_I2C,
+        "sensor_spi": IOPortType.SENSOR_SPI,
+        "sensor_gpio": IOPortType.SENSOR_GPIO,
+        "analog": IOPortType.SENSOR_ANALOG,
+        # 电机
+        "motor": IOPortType.MOTOR, "servo": IOPortType.SERVO,
+        "stepper": IOPortType.STEPPER, "dc_motor": IOPortType.DC_MOTOR,
+        "brushless": IOPortType.BRUSHLESS,
+        # 开发板
+        "jetson_gpio": IOPortType.JETSON_GPIO, "jetson": IOPortType.JETSON_GPIO,
+        "jetson_cam": IOPortType.JETSON_CAM,
+        "orange_gpio": IOPortType.ORANGE_PI_GPIO, "orange_pi": IOPortType.ORANGE_PI_GPIO,
+        "orange": IOPortType.ORANGE_PI_GPIO,
+        "rockchip_gpio": IOPortType.ROCKCHIP_GPIO, "rockchip": IOPortType.ROCKCHIP_GPIO,
+        "rk": IOPortType.ROCKCHIP_GPIO,
+        "allwinner_gpio": IOPortType.ALLWINNER_GPIO, "allwinner": IOPortType.ALLWINNER_GPIO,
+        "aw": IOPortType.ALLWINNER_GPIO,
+        "banana_pi": IOPortType.BANANA_PI_GPIO, "banana": IOPortType.BANANA_PI_GPIO,
+        # ESP32/Arduino
+        "esp32": IOPortType.ESP32_UART, "esp32_uart": IOPortType.ESP32_UART,
+        "esp32_spi": IOPortType.ESP32_SPI, "esp32_i2c": IOPortType.ESP32_I2C,
+        "arduino": IOPortType.ARDUINO_UART, "arduino_uart": IOPortType.ARDUINO_UART,
+        "arduino_i2c": IOPortType.ARDUINO_I2C, "arduino_spi": IOPortType.ARDUINO_SPI,
+        # 虚拟
+        "virtual": IOPortType.VIRTUAL, "sim": IOPortType.SIMULATOR,
+        "debug": IOPortType.DEBUG,
+    }
+
+class _DeviceInfo:
+    """设备信息"""
+    def __init__(self, id, name, port_type, port_spec, driver, available=False, 
+                 forced=False, aliases=None, metadata=None, error=None):
+        self.id = id
+        self.name = name
+        self.port_type = port_type
+        self.port_spec = port_spec
+        self.driver = driver
+        self.available = available
+        self.forced = forced
+        self.aliases = aliases or []
+        self.metadata = metadata or {}
+        self.error = error
+
+class _PortBinder:
+    """端口绑定器 - 支持 su 强制绑定"""
+    @staticmethod
+    def parse(port_spec):
+        port_spec = port_spec.lower().strip()
+        is_forced = port_spec.startswith('su')
+        if is_forced:
+            port_spec = port_spec[2:]
+        port_type = _PortAlias.ALIASES.get(port_spec)
+        if port_type is None:
+            for alias, ptype in _PortAlias.ALIASES.items():
+                if port_spec.startswith(alias):
+                    rest = port_spec[len(alias):]
+                    if rest == '' or rest.isdigit():
+                        port_type = ptype
+                        break
+        return is_forced, port_spec, port_type
+    
+    @staticmethod
+    def bind(port_spec, device_list):
+        is_forced, port, port_type = _PortBinder.parse(port_spec)
+        matched = None
+        for dev in device_list:
+            if dev.port_spec == port or port in dev.aliases:
+                matched = dev
+                break
+        if matched:
+            if not is_forced:
+                if matched.port_type == port_type or port_type is None:
+                    return matched
+                matched.error = f"类型不匹配: 设备是 {matched.port_type.value}, 请求 {port_type.value if port_type else '未知'}"
+                return None
+            matched.forced = True
+            return matched
+        if is_forced:
+            return _DeviceInfo(
+                id=f"virtual_{port}",
+                name=f"虚拟设备 ({port})",
+                port_type=port_type or IOPortType.VIRTUAL,
+                port_spec=port,
+                driver="virtual",
+                available=True,
+                forced=True,
+                aliases=[port],
+                metadata={"is_virtual": True}
+            )
+        return None
+
+class _SystemDetector:
+    """系统检测器"""
+    @staticmethod
+    def detect():
+        info = {
+            "os": platform.system().lower(),
+            "arch": platform.machine(),
+            "processor": platform.processor(),
+            "board": "pc",
+            "board_model": "Unknown",
+            "features": {}
+        }
+        try:
+            with open('/proc/device-tree/model', 'r') as f:
+                model = f.read()
+                if 'Raspberry Pi' in model:
+                    info["board"] = "raspberry_pi"
+                elif 'Orange Pi' in model:
+                    info["board"] = "orange_pi"
+                elif 'NVIDIA Jetson' in model:
+                    info["board"] = "jetson"
+                elif 'Rockchip' in model:
+                    info["board"] = "rockchip"
+                elif 'Allwinner' in model:
+                    info["board"] = "allwinner"
+                elif 'Banana Pi' in model:
+                    info["board"] = "banana_pi"
+                info["board_model"] = model.strip()
+        except:
+            pass
+        
+        info["features"]["gpio"] = _HAS_RPI_GPIO
+        info["features"]["i2c"] = _HAS_SMBUS
+        info["features"]["spi"] = _HAS_SPIDEV
+        info["features"]["uart"] = _HAS_SERIAL
+        info["features"]["usb"] = _HAS_PYUSB
+        info["features"]["camera"] = _HAS_PICAMERA
+        info["features"]["opencv"] = _HAS_OPENCV
+        info["features"]["ai"] = _HAS_TORCH
+        return info
+
+class _DeviceScanner:
+    @staticmethod
+    def scan(system_info):
+        devices = []
+        board = system_info.get("board", "pc")
+        features = system_info.get("features", {})
+        
+        # GPIO
+        if features.get("gpio", False):
+            devices.append(_DeviceInfo(
+                "gpio", "GPIO 控制器", IOPortType.GPIO,
+                "gpio", "RPi.GPIO", True, aliases=["gpio0", "bcm"]
+            ))
+        
+        # I2C
+        if features.get("i2c", False):
+            devices.append(_DeviceInfo(
+                "i2c", "I2C 总线", IOPortType.I2C,
+                "i2c", "smbus2", True, aliases=["i2c0", "i2c1", "smbus"]
+            ))
+        
+        # SPI
+        if features.get("spi", False):
+            devices.append(_DeviceInfo(
+                "spi", "SPI 总线", IOPortType.SPI,
+                "spi", "spidev", True, aliases=["spi0", "spi1"]
+            ))
+        
+        # UART
+        if features.get("uart", False):
+            devices.append(_DeviceInfo(
+                "uart", "UART 串口", IOPortType.UART,
+                "uart", "serial", True, aliases=["ttyS0", "ttyAMA0"]
+            ))
+        
+        # 摄像头
+        if features.get("camera", False):
+            devices.append(_DeviceInfo(
+                "csi_camera", "CSI 摄像头", IOPortType.CSI,
+                "csi", "picamera", True, aliases=["csi0", "cam", "camera"]
+            ))
+        
+        # USB 设备扫描
+        if features.get("usb", False):
+            try:
+                import usb.core
+                import usb.util
+                for dev in usb.core.find(find_all=True):
+                    try:
+                        product = usb.util.get_string(dev, dev.iProduct) if dev.iProduct else "USB 设备"
+                        devices.append(_DeviceInfo(
+                            f"usb_{dev.idVendor:04x}_{dev.idProduct:04x}",
+                            product, IOPortType.USB,
+                            f"usb{dev.address}", "pyusb", True,
+                            aliases=[f"usb{dev.address}"],
+                            metadata={"vid": dev.idVendor, "pid": dev.idProduct}
+                        ))
+                    except:
+                        pass
+            except:
+                pass
+        
+        # OpenCV 摄像头
+        if features.get("opencv", False):
+            try:
+                cap = cv2.VideoCapture(0)
+                if cap.isOpened():
+                    devices.append(_DeviceInfo(
+                        "usb_camera", "USB 摄像头 (OpenCV)", IOPortType.USB_CAM,
+                        "usb_cam", "opencv", True, aliases=["cam0", "webcam"]
+                    ))
+                    cap.release()
+            except:
+                pass
+        
+        # PCIe 设备
+        try:
+            result = subprocess.run(['lspci'], capture_output=True, text=True)
+            for line in result.stdout.split('\n'):
+                if 'NVIDIA' in line or 'AMD' in line:
+                    if 'VGA' in line or '3D' in line:
+                        devices.append(_DeviceInfo(
+                            f"pcie_{line.split()[0]}", f"GPU: {line.strip()}",
+                            IOPortType.PCIE, f"pcie_{line.split()[0]}",
+                            "pcie", True, aliases=["gpu", "pcie"]
+                        ))
+                elif 'AI' in line or 'accelerator' in line.lower() or 'NPU' in line:
+                    devices.append(_DeviceInfo(
+                        f"pcie_ai_{line.split()[0]}", f"AI 加速: {line.strip()}",
+                        IOPortType.AI_PCIE, f"pcie_ai_{line.split()[0]}",
+                        "pcie_ai", True, aliases=["ai", "ai_pcie"]
+                    ))
+        except:
+            pass
+        
+        # 开发板专用
+        board_map = {
+            "jetson": ("Jetson GPIO", IOPortType.JETSON_GPIO, "Jetson.GPIO", "jetson_gpio", ["jetson"]),
+            "orange_pi": ("香橙派 GPIO", IOPortType.ORANGE_PI_GPIO, "OPi.GPIO", "orange_gpio", ["orange", "orange_pi"]),
+            "rockchip": ("Rockchip GPIO", IOPortType.ROCKCHIP_GPIO, "rockchip_gpio", "rockchip_gpio", ["rockchip", "rk"]),
+            "allwinner": ("全志 GPIO", IOPortType.ALLWINNER_GPIO, "allwinner_gpio", "allwinner_gpio", ["allwinner", "aw"]),
+            "banana_pi": ("Banana Pi GPIO", IOPortType.BANANA_PI_GPIO, "banana_gpio", "banana_gpio", ["banana", "banana_pi"]),
+        }
+        if board in board_map:
+            name, ptype, driver, port, aliases = board_map[board]
+            devices.append(_DeviceInfo(
+                port, name, ptype, port, driver, True, aliases=aliases
+            ))
+        
+        return devices
+
+class IOLib:
+    """硬件控制库 - IO 子模块"""
+    
+    def __init__(self):
+        self.system_info = _SystemDetector.detect()
+        self._devices = _DeviceScanner.scan(self.system_info)
+        self.available_devices = [d for d in self._devices if d.available]
+        
+        # 快捷访问
+        self.gpio = self._get_device("gpio")
+        self.i2c = self._get_device("i2c")
+        self.spi = self._get_device("spi")
+        self.uart = self._get_device("uart")
+        self.camera = self._get_device("csi_camera") or self._get_device("usb_camera")
+        self.gpu = self._get_device("gpu")
+        self.ai = self._get_device("ai")
+    
+    def _get_device(self, name):
+        for d in self.available_devices:
+            if d.id == name or name in d.aliases:
+                return d
+        return None
+    
+    def bind(self, port_spec):
+        """绑定设备 - 支持 su 强制绑定"""
+        return _PortBinder.bind(port_spec, self.available_devices)
+    
+    def get(self, port_spec):
+        """获取设备信息"""
+        for d in self.available_devices:
+            if d.port_spec == port_spec or port_spec in d.aliases:
+                return d
+        return None
+    
+    def list(self):
+        """列出所有可用设备"""
+        return self.available_devices.copy()
+    
+    def summary(self):
+        """系统摘要"""
+        return {
+            "system": self.system_info,
+            "device_count": len(self.available_devices),
+            "devices": [{"name": d.name, "type": d.port_type, "port": d.port_spec} 
+                       for d in self.available_devices]
+        }
 
 # ==================== StdLib 统一实例 ====================
 
@@ -2679,10 +3171,10 @@ class StdLib:
         self.utils = Utils()
         self.sys = SystemInfo()
         
-        # 图论算法模块
+        # 图论算法
         self.graph = GraphAlgo()
         
-        # ========== 新增功能 ==========
+        # 新增功能
         self.thread_pool = ThreadPool
         self.cache = Cache
         self.retry = retry
@@ -2701,6 +3193,9 @@ class StdLib:
         self.semaphore = Semaphore
         self.memory_pool = MemoryPool
         self.bitfield = BitField
+        
+        # ========== IO 硬件控制 ==========
+        self.io_lib = IOLib()
 
 # 创建全局实例
 std = StdLib()
