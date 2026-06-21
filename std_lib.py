@@ -13,81 +13,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ==================== std_lib.py - PWOS3 超级增强标准库 ====================
-# 版本: 4.1 - 完整硬件控制版
-# 包含: 基础类型、容器、算法、网络、加密、表格、进度条、配置、日志
-#       + 完整 IO 硬件控制 (GPIO/I2C/SPI/UART/USB/PCIe/CSI/DSI/传感器/电机/AI)
-#       + BFS/图论扩展
-#       + ThreadPool, Cache, Retry, RingBuffer, Stopwatch, LRU, EventBus
-#       + ObjectPool, Lazy, CsvReader, IniConfig, SortedSet, Batched
-#       + Profiler, Zip, Tee, Observer, Semaphore, MemoryPool, BitField
-
+# std_lib.py - PWOS3 超级增强标准库 v3.0 (硬件增强版)
 import os, sys, json, time, random, hashlib, datetime, shutil, zipfile, tarfile
 import re, base64, csv, sqlite3, subprocess, socket, platform, math, textwrap
 import io, glob, fnmatch, tempfile, configparser, logging, string, secrets
-import getpass, threading, queue, struct, itertools, collections, enum
+import getpass, threading, queue, struct, itertools, collections, enum as enum_module
 import heapq, bisect, functools, operator, inspect, copy, weakref, contextlib
-import concurrent.futures, asyncio, typing, urllib.request, urllib.parse
-from typing import Any, Dict, List, Tuple, Optional, Union, Callable, TypeVar, Generic, Iterator
+import concurrent.futures, asyncio, typing, urllib.request, urllib.parse, urllib.error
+from typing import Any, Dict, List, Tuple, Optional, Union, Callable, TypeVar, Generic, Iterator, Set, Iterable
 from collections import OrderedDict, defaultdict, Counter, deque, namedtuple
 from functools import wraps, partial, reduce, lru_cache
 from contextlib import contextmanager
 import traceback
 import uuid as _uuid
-
-# ==================== 硬件控制导入 ====================
+import gzip
+import zlib
+import abc
+import dataclasses
+import enum
+import warnings
+import webbrowser
+import smtplib
+import email.mime.text
+import email.mime.multipart
+import email.mime.base
+import email.encoders
+import mimetypes
+import hashlib
+import hmac
+import secrets
+import tempfile
+import filecmp
+import difflib
+import pickle
+import shelve
+import marshal
+import array
+import mmap
+import codecs
+import unicodedata
+import html
+import xml.etree.ElementTree as ET
+import xml.dom.minidom
+import json
 try:
-    import RPi.GPIO as _RPi_GPIO
-    _HAS_RPI_GPIO = True
+    import yaml
 except ImportError:
-    _HAS_RPI_GPIO = False
-
-try:
-    import smbus2 as _smbus
-    _HAS_SMBUS = True
-except ImportError:
-    try:
-        import smbus as _smbus
-        _HAS_SMBUS = True
-    except ImportError:
-        _HAS_SMBUS = False
-
-try:
-    import spidev as _spidev
-    _HAS_SPIDEV = True
-except ImportError:
-    _HAS_SPIDEV = False
-
-try:
-    import serial as _serial
-    _HAS_SERIAL = True
-except ImportError:
-    _HAS_SERIAL = False
-
-try:
-    import usb.core as _usb_core
-    import usb.util as _usb_util
-    _HAS_PYUSB = True
-except ImportError:
-    _HAS_PYUSB = False
-
-try:
-    import picamera as _picamera
-    _HAS_PICAMERA = True
-except ImportError:
-    _HAS_PICAMERA = False
-
-try:
-    import cv2 as _cv2
-    _HAS_OPENCV = True
-except ImportError:
-    _HAS_OPENCV = False
-
-try:
-    import torch as _torch
-    _HAS_TORCH = True
-except ImportError:
-    _HAS_TORCH = False
+    yaml = None
 
 # ==================== 1. 基础类型增强 ====================
 
@@ -163,6 +135,15 @@ class TypeInfo:
     @staticmethod
     def cast(obj, t):
         return t(obj)
+    @staticmethod
+    def is_subclass(cls, parent):
+        return issubclass(cls, parent)
+    @staticmethod
+    def methods(obj):
+        return [m for m in dir(obj) if callable(getattr(obj, m)) and not m.startswith('_')]
+    @staticmethod
+    def attributes(obj):
+        return [a for a in dir(obj) if not callable(getattr(obj, a)) and not a.startswith('_')]
 
 class AnyType:
     def __init__(self, value=None):
@@ -228,6 +209,10 @@ class Result:
         if self.is_ok():
             return func(self._value)
         return self
+    def or_else(self, func):
+        if self.is_err():
+            return func(self._error)
+        return self
     def __repr__(self):
         if self.is_ok():
             return f"Ok({self._value})"
@@ -235,24 +220,56 @@ class Result:
 
 class Enum:
     def __init__(self, **kwargs):
+        self._values = {}
+        self._names = {}
+        auto_counter = 0
         for key, value in kwargs.items():
+            if value == "AUTO":
+                value = auto_counter
+                auto_counter += 1
             setattr(self, key, value)
+            self._values[value] = key
+            self._names[key] = value
     def items(self):
-        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}.items()
+        return [(k, v) for k, v in self.__dict__.items() if not k.startswith('_')]
+    def keys(self):
+        return [k for k, _ in self.items()]
+    def values(self):
+        return [v for _, v in self.items()]
+    def get_name(self, value):
+        return self._values.get(value, None)
+    def get_value(self, name):
+        return self._names.get(name, None)
+    def contains_value(self, value):
+        return value in self._values
+    def contains_name(self, name):
+        return name in self._names
+    def __iter__(self):
+        return iter(self.items())
+    def __repr__(self):
+        items = ', '.join(f"{k}={v}" for k, v in self.items())
+        return f"Enum({items})"
 
 class Namespace:
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
+    def to_dict(self):
+        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+    def __repr__(self):
+        return f"Namespace({self.to_dict()})"
 
 class Struct:
     def __init__(self, **kwargs):
         for key, value in kwargs.items():
             setattr(self, key, value)
     def to_dict(self):
-        return {k: v for k, v in self.__dict__.items()}
+        return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
     def __repr__(self):
-        items = ', '.join(f"{k}={v}" for k, v in self.__dict__.items())
+        items = ', '.join(f"{k}={v}" for k, v in self.to_dict().items())
         return f"Struct({items})"
 
 # ==================== 2. 容器增强 ====================
@@ -299,6 +316,14 @@ class Vector:
     def for_each(self, func):
         for item in self._data:
             func(item)
+    def filter(self, predicate):
+        return Vector([x for x in self._data if predicate(x)])
+    def map(self, func):
+        return Vector([func(x) for x in self._data])
+    def reduce(self, func, initial=None):
+        if initial is None:
+            return functools.reduce(func, self._data)
+        return functools.reduce(func, self._data, initial)
     def __getitem__(self, index):
         return self._data[index]
     def __setitem__(self, index, value):
@@ -329,6 +354,8 @@ class Deque:
         return len(self._data)
     def empty(self):
         return len(self._data) == 0
+    def rotate(self, n):
+        self._data.rotate(n)
     def __iter__(self):
         return iter(self._data)
     def __repr__(self):
@@ -403,6 +430,15 @@ class List:
             result.append(current.value)
             current = current.next
         return result
+    def find(self, value):
+        current = self._head
+        idx = 0
+        while current:
+            if current.value == value:
+                return idx
+            current = current.next
+            idx += 1
+        return -1
 
 class Stack:
     def __init__(self):
@@ -417,6 +453,8 @@ class Stack:
         return len(self._data)
     def empty(self) -> bool:
         return len(self._data) == 0
+    def clear(self):
+        self._data.clear()
 
 class Queue:
     def __init__(self):
@@ -433,6 +471,8 @@ class Queue:
         return len(self._data)
     def empty(self) -> bool:
         return len(self._data) == 0
+    def clear(self):
+        self._data.clear()
 
 class PriorityQueue:
     def __init__(self, max_heap=True, key=None):
@@ -454,6 +494,8 @@ class PriorityQueue:
         return len(self._data)
     def empty(self) -> bool:
         return len(self._data) == 0
+    def clear(self):
+        self._data.clear()
 
 class Set:
     def __init__(self, data=None):
@@ -479,6 +521,9 @@ class Set:
         return len(self._set) == 0
     def to_list(self) -> list:
         return self._data.copy()
+    def clear(self):
+        self._set.clear()
+        self._data.clear()
     def __iter__(self):
         return iter(self._data)
 
@@ -495,6 +540,14 @@ class HashSet:
         return len(self._set)
     def empty(self):
         return len(self._set) == 0
+    def clear(self):
+        self._set.clear()
+    def union(self, other):
+        return HashSet(self._set | other._set)
+    def intersection(self, other):
+        return HashSet(self._set & other._set)
+    def difference(self, other):
+        return HashSet(self._set - other._set)
     def __iter__(self):
         return iter(self._set)
 
@@ -520,6 +573,8 @@ class Map:
         return list(self._dict.values())
     def items(self):
         return list(self._dict.items())
+    def clear(self):
+        self._dict.clear()
     def __getitem__(self, key):
         return self._dict[key]
     def __setitem__(self, key, value):
@@ -544,6 +599,8 @@ class HashMap:
         return list(self._dict.values())
     def items(self):
         return list(self._dict.items())
+    def clear(self):
+        self._dict.clear()
     def __getitem__(self, key):
         return self._dict[key]
     def __setitem__(self, key, value):
@@ -568,6 +625,8 @@ class MultiSet:
         return self._data.copy()
     def size(self):
         return len(self._data)
+    def clear(self):
+        self._data.clear()
 
 class MultiMap:
     def __init__(self):
@@ -587,6 +646,8 @@ class MultiMap:
         return self._data.copy()
     def size(self):
         return len(self._data)
+    def clear(self):
+        self._data.clear()
 
 class StringView:
     def __init__(self, s: str):
@@ -597,6 +658,14 @@ class StringView:
         return StringView(self._s[pos:pos+length])
     def find(self, sub, start=0):
         return self._s.find(sub, start)
+    def rfind(self, sub, start=0):
+        return self._s.rfind(sub, start)
+    def replace(self, old, new):
+        return StringView(self._s.replace(old, new))
+    def split(self, sep=None, maxsplit=-1):
+        return [StringView(s) for s in self._s.split(sep, maxsplit)]
+    def strip(self):
+        return StringView(self._s.strip())
     def size(self):
         return len(self._s)
     def empty(self):
@@ -829,8 +898,52 @@ class Algo:
         true_list = [x for x in data if predicate(x)]
         false_list = [x for x in data if not predicate(x)]
         return true_list, false_list
+    
+    @staticmethod
+    def quick_sort(data, key=None, reverse=False):
+        if len(data) <= 1:
+            return data
+        pivot = data[0]
+        left = [x for x in data[1:] if (key(x) if key else x) <= (key(pivot) if key else pivot)]
+        right = [x for x in data[1:] if (key(x) if key else x) > (key(pivot) if key else pivot)]
+        if reverse:
+            return Algo.quick_sort(right, key, reverse) + [pivot] + Algo.quick_sort(left, key, reverse)
+        return Algo.quick_sort(left, key, reverse) + [pivot] + Algo.quick_sort(right, key, reverse)
+    
+    @staticmethod
+    def all_of(data, predicate):
+        return all(predicate(x) for x in data)
+    
+    @staticmethod
+    def any_of(data, predicate):
+        return any(predicate(x) for x in data)
+    
+    @staticmethod
+    def none_of(data, predicate):
+        return not any(predicate(x) for x in data)
+    
+    @staticmethod
+    def adjacent_find(data, predicate=None):
+        for i in range(len(data) - 1):
+            if predicate is None:
+                if data[i] == data[i+1]:
+                    return i
+            elif predicate(data[i], data[i+1]):
+                return i
+        return -1
+    
+    @staticmethod
+    def mismatch(a, b, predicate=None):
+        n = min(len(a), len(b))
+        for i in range(n):
+            if predicate is None:
+                if a[i] != b[i]:
+                    return i
+            elif not predicate(a[i], b[i]):
+                return i
+        return n if len(a) == len(b) else -1
 
-# ==================== 4. Range ====================
+# ==================== 4. Range 类 ====================
 
 class Range:
     def __init__(self, start, end=None, step=1):
@@ -862,6 +975,8 @@ class Range:
         for x in self:
             result *= x
         return result
+    def count(self):
+        return len(list(self))
     def __iter__(self):
         return iter(range(self._start, self._end, self._step))
     def __repr__(self):
@@ -878,7 +993,7 @@ class Range2D:
             for y in self.y_range:
                 yield x, y
 
-# ==================== 5. JSON ====================
+# ==================== 5. JSON 增强 ====================
 
 class JSON:
     @staticmethod
@@ -887,6 +1002,9 @@ class JSON:
     @staticmethod
     def stringify(obj, indent=2):
         return json.dumps(obj, ensure_ascii=False, indent=indent)
+    @staticmethod
+    def stringify_compact(obj):
+        return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
     @staticmethod
     def read(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -899,13 +1017,29 @@ class JSON:
     @staticmethod
     def pretty_print(obj):
         print(json.dumps(obj, ensure_ascii=False, indent=2))
+    @staticmethod
+    def validate(text):
+        try:
+            json.loads(text)
+            return True
+        except:
+            return False
+    @staticmethod
+    def merge(a, b):
+        result = a.copy()
+        for key, value in b.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = JSON.merge(result[key], value)
+            else:
+                result[key] = value
+        return result
 
-# ==================== 6. HTTP ====================
+# ==================== 6. HTTP 客户端 ====================
 
 class HTTP:
     @staticmethod
     def get(url, headers=None, timeout=30):
-        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/4.1'})
+        req = urllib.request.Request(url, headers=headers or {'User-Agent': 'PWOS3/5.0'})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode('utf-8')
     @staticmethod
@@ -921,11 +1055,29 @@ class HTTP:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read().decode('utf-8')
     @staticmethod
+    def post_json(url, data, headers=None, timeout=30):
+        headers = headers or {}
+        headers['Content-Type'] = 'application/json'
+        return HTTP.post(url, json.dumps(data).encode('utf-8'), headers, timeout)
+    @staticmethod
     def download(url, save_path, timeout=30):
         urllib.request.urlretrieve(url, save_path)
         return True
+    @staticmethod
+    def head(url, timeout=30):
+        req = urllib.request.Request(url, method='HEAD')
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return dict(resp.headers)
+    @staticmethod
+    def status(url, timeout=30):
+        try:
+            req = urllib.request.Request(url, method='HEAD')
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status
+        except urllib.error.URLError:
+            return None
 
-# ==================== 7. 加密 ====================
+# ==================== 7. 加密工具 ====================
 
 class Crypto:
     @staticmethod
@@ -938,28 +1090,73 @@ class Crypto:
     def sha1(text):
         return hashlib.sha1(text.encode()).hexdigest()
     @staticmethod
+    def sha512(text):
+        return hashlib.sha512(text.encode()).hexdigest()
+    @staticmethod
     def base64_encode(text):
         return base64.b64encode(text.encode()).decode()
     @staticmethod
     def base64_decode(text):
         return base64.b64decode(text.encode()).decode()
     @staticmethod
+    def base64_url_encode(text):
+        return base64.urlsafe_b64encode(text.encode()).decode().rstrip('=')
+    @staticmethod
+    def base64_url_decode(text):
+        padding = 4 - len(text) % 4
+        if padding != 4:
+            text += '=' * padding
+        return base64.urlsafe_b64decode(text).decode()
+    @staticmethod
     def random_token(length=32):
         return secrets.token_hex(length)
     @staticmethod
     def random_string(length=8):
         return ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(length))
+    @staticmethod
+    def hmac_sha256(key, message):
+        return hmac.new(key.encode(), message.encode(), hashlib.sha256).hexdigest()
+    @staticmethod
+    def hmac_md5(key, message):
+        return hmac.new(key.encode(), message.encode(), hashlib.md5).hexdigest()
+    @staticmethod
+    def aes_encrypt(key, data):
+        try:
+            from cryptography.fernet import Fernet
+            import base64
+            if len(key) < 32:
+                key = hashlib.sha256(key.encode()).digest()
+            fernet_key = base64.urlsafe_b64encode(key[:32])
+            f = Fernet(fernet_key)
+            return f.encrypt(data.encode() if isinstance(data, str) else data)
+        except ImportError:
+            raise ImportError("需要安装 cryptography 库: pip install cryptography")
+    @staticmethod
+    def aes_decrypt(key, encrypted):
+        try:
+            from cryptography.fernet import Fernet
+            import base64
+            if len(key) < 32:
+                key = hashlib.sha256(key.encode()).digest()
+            fernet_key = base64.urlsafe_b64encode(key[:32])
+            f = Fernet(fernet_key)
+            return f.decrypt(encrypted).decode()
+        except ImportError:
+            raise ImportError("需要安装 cryptography 库: pip install cryptography")
 
-# ==================== 8. 表格 ====================
+# ==================== 8. 表格美化 ====================
 
 class Table:
     def __init__(self, headers=None):
         self.headers = headers or []
         self.rows = []
+        self.alignments = {}
     def add_row(self, row):
         self.rows.append(row)
     def add_rows(self, rows):
         self.rows.extend(rows)
+    def set_alignment(self, col, align='left'):
+        self.alignments[col] = align
     def clear(self):
         self.rows.clear()
     def print(self):
@@ -976,11 +1173,27 @@ class Table:
         separator = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
         if self.headers:
             print(separator)
-            header_line = "| " + " | ".join(str(h).ljust(w) for h, w in zip(self.headers, col_widths)) + " |"
+            header_line = "| "
+            for i, (h, w) in enumerate(zip(self.headers, col_widths)):
+                align = self.alignments.get(i, 'left')
+                if align == 'right':
+                    header_line += str(h).rjust(w) + " | "
+                elif align == 'center':
+                    header_line += str(h).center(w) + " | "
+                else:
+                    header_line += str(h).ljust(w) + " | "
             print(header_line)
         print(separator)
         for row in self.rows:
-            line = "| " + " | ".join(str(cell).ljust(w) for cell, w in zip(row, col_widths)) + " |"
+            line = "| "
+            for i, (cell, w) in enumerate(zip(row, col_widths)):
+                align = self.alignments.get(i, 'left')
+                if align == 'right':
+                    line += str(cell).rjust(w) + " | "
+                elif align == 'center':
+                    line += str(cell).center(w) + " | "
+                else:
+                    line += str(cell).ljust(w) + " | "
             print(line)
         print(separator)
     def to_string(self):
@@ -1001,6 +1214,7 @@ class ProgressBar:
         self.suffix = suffix
         self.current = 0
         self.color = color
+        self.start_time = time.time()
     def update(self, n=1):
         self.current += n
         percent = self.current / self.total
@@ -1013,13 +1227,20 @@ class ProgressBar:
                 bar = f"\033[96m{bar}\033[0m"
             else:
                 bar = f"\033[92m{bar}\033[0m"
-        print(f"\r{self.prefix}: |{bar}| {self.current}/{self.total} {self.suffix}", end="", flush=True)
+        elapsed = time.time() - self.start_time
+        if self.current > 0 and percent > 0:
+            eta = elapsed / percent * (1 - percent)
+            eta_str = f"ETA: {int(eta)}s"
+        else:
+            eta_str = ""
+        print(f"\r{self.prefix}: |{bar}| {self.current}/{self.total} {percent*100:.1f}% {eta_str} {self.suffix}", end="", flush=True)
         if self.current >= self.total:
             print()
     def reset(self):
         self.current = 0
+        self.start_time = time.time()
 
-# ==================== 10. 配置 ====================
+# ==================== 10. 配置管理 ====================
 
 class Config:
     def __init__(self, filepath=None):
@@ -1033,6 +1254,11 @@ class Config:
             with open(path, 'r', encoding='utf-8') as f:
                 if path.endswith('.json'):
                     self._config = json.load(f)
+                elif path.endswith('.yaml') or path.endswith('.yml'):
+                    if yaml:
+                        self._config = yaml.safe_load(f) or {}
+                    else:
+                        raise ImportError("PyYAML not installed")
                 else:
                     self._config = json.loads(f.read())
         return self
@@ -1040,7 +1266,13 @@ class Config:
         path = filepath or self.filepath
         if path:
             with open(path, 'w', encoding='utf-8') as f:
-                json.dump(self._config, f, ensure_ascii=False, indent=2)
+                if path.endswith('.yaml') or path.endswith('.yml'):
+                    if yaml:
+                        yaml.dump(self._config, f, allow_unicode=True)
+                    else:
+                        raise ImportError("PyYAML not installed")
+                else:
+                    json.dump(self._config, f, ensure_ascii=False, indent=2)
     def get(self, key, default=None):
         keys = key.split('.')
         value = self._config
@@ -1063,30 +1295,58 @@ class Config:
         return self.get(key) is not None
     def all(self):
         return self._config.copy()
+    def delete(self, key):
+        keys = key.split('.')
+        config = self._config
+        for k in keys[:-1]:
+            if k not in config:
+                return
+            config = config[k]
+        if keys[-1] in config:
+            del config[keys[-1]]
+    def __getitem__(self, key):
+        return self.get(key)
+    def __setitem__(self, key, value):
+        self.set(key, value)
 
-# ==================== 11. 日志 ====================
+# ==================== 11. 日志工具 ====================
 
 class Logger:
-    LEVELS = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3}
-    def __init__(self, name="app", level="INFO", color=True):
+    LEVELS = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3, "FATAL": 4}
+    COLORS = {
+        "DEBUG": "\033[90m",
+        "INFO": "\033[92m",
+        "WARN": "\033[93m",
+        "ERROR": "\033[91m",
+        "FATAL": "\033[95m"
+    }
+    def __init__(self, name="app", level="INFO", color=True, log_file=None):
         self.name = name
         self.level = self.LEVELS.get(level.upper(), 1)
         self.color = color
+        self.log_file = log_file
+        if log_file:
+            os.makedirs(os.path.dirname(log_file) or '.', exist_ok=True)
     def _log(self, level, msg, color_func=None):
         if self.LEVELS[level] >= self.level:
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             log_msg = f"[{timestamp}] [{level}] [{self.name}] {msg}"
             if self.color and color_func:
                 log_msg = color_func(log_msg)
             print(log_msg)
+            if self.log_file:
+                with open(self.log_file, 'a', encoding='utf-8') as f:
+                    f.write(log_msg + '\n')
     def debug(self, msg):
-        self._log("DEBUG", msg, lambda x: f"\033[90m{x}\033[0m")
+        self._log("DEBUG", msg, lambda x: f"{self.COLORS['DEBUG']}{x}\033[0m")
     def info(self, msg):
-        self._log("INFO", msg, lambda x: f"\033[92m{x}\033[0m")
+        self._log("INFO", msg, lambda x: f"{self.COLORS['INFO']}{x}\033[0m")
     def warn(self, msg):
-        self._log("WARN", msg, lambda x: f"\033[93m{x}\033[0m")
+        self._log("WARN", msg, lambda x: f"{self.COLORS['WARN']}{x}\033[0m")
     def error(self, msg):
-        self._log("ERROR", msg, lambda x: f"\033[91m{x}\033[0m")
+        self._log("ERROR", msg, lambda x: f"{self.COLORS['ERROR']}{x}\033[0m")
+    def fatal(self, msg):
+        self._log("FATAL", msg, lambda x: f"{self.COLORS['FATAL']}{x}\033[0m")
 
 # ==================== 12. 系统工具 ====================
 
@@ -1109,6 +1369,15 @@ class Memory:
     @staticmethod
     def size_of(obj):
         return sys.getsizeof(obj)
+    @staticmethod
+    def hex_dump(data, bytes_per_line=16):
+        result = []
+        for i in range(0, len(data), bytes_per_line):
+            chunk = data[i:i+bytes_per_line]
+            hex_str = ' '.join(f'{b:02x}' for b in chunk)
+            ascii_str = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
+            result.append(f'{i:08x}  {hex_str:<{bytes_per_line*3}}  {ascii_str}')
+        return '\n'.join(result)
 
 class IOStream:
     @staticmethod
@@ -1140,8 +1409,14 @@ class StringStream:
         self._buffer.write(s)
     def read(self):
         return self._buffer.read()
+    def readline(self):
+        return self._buffer.readline()
     def str(self):
         return self._buffer.getvalue()
+    def seek(self, pos):
+        self._buffer.seek(pos)
+    def tell(self):
+        return self._buffer.tell()
 
 class FileStream:
     def __init__(self, filepath, mode='r'):
@@ -1163,6 +1438,10 @@ class FileStream:
         return self._handle.readlines() if self._handle else []
     def write(self, data):
         if self._handle: self._handle.write(data)
+    def writelines(self, lines):
+        if self._handle: self._handle.writelines(lines)
+    def flush(self):
+        if self._handle: self._handle.flush()
     def seek(self, pos):
         if self._handle: self._handle.seek(pos)
     def tell(self):
@@ -1204,6 +1483,12 @@ class Duration:
         return self._sec
     def to_milliseconds(self):
         return int(self._sec * 1000)
+    def to_minutes(self):
+        return self._sec / 60
+    def to_hours(self):
+        return self._sec / 3600
+    def to_days(self):
+        return self._sec / 86400
     def __repr__(self):
         return f"Duration({self._sec}s)"
 
@@ -1244,8 +1529,12 @@ class Regex:
         return self._compiled.fullmatch(text) is not None
     def find_all(self, text):
         return self._compiled.findall(text)
+    def find_iter(self, text):
+        return self._compiled.finditer(text)
     def replace(self, text, repl):
         return self._compiled.sub(repl, text)
+    def replace_n(self, text, repl, count):
+        return self._compiled.subn(repl, text, count)
     def split(self, text, maxsplit=0):
         return self._compiled.split(text, maxsplit)
 
@@ -1260,20 +1549,28 @@ class RandomEngine:
         return self._rng.gauss(mu, sigma)
     def choice(self, seq):
         return self._rng.choice(seq)
+    def choices(self, seq, k=1, weights=None):
+        return self._rng.choices(seq, weights=weights, k=k)
     def shuffle(self, seq):
         self._rng.shuffle(seq)
     def sample(self, seq, k):
         return self._rng.sample(seq, k)
+    def random(self):
+        return self._rng.random()
+    def seed(self, seed):
+        self._rng.seed(seed)
 
 class Thread:
     def __init__(self, target, args=(), kwargs={}):
         self._thread = threading.Thread(target=target, args=args, kwargs=kwargs)
     def start(self):
         self._thread.start()
-    def join(self):
-        self._thread.join()
+    def join(self, timeout=None):
+        self._thread.join(timeout)
     def is_alive(self):
         return self._thread.is_alive()
+    def get_id(self):
+        return self._thread.ident
 
 class Mutex:
     def __init__(self):
@@ -1307,6 +1604,9 @@ class AsyncExecutor:
     @staticmethod
     def map(func, *iterables):
         return AsyncExecutor._executor.map(func, *iterables)
+    @staticmethod
+    def shutdown(wait=True):
+        AsyncExecutor._executor.shutdown(wait=wait)
 
 class Future:
     def __init__(self, cf):
@@ -1317,9 +1617,16 @@ class Future:
         concurrent.futures.wait([self._cf], timeout)
     def done(self):
         return self._cf.done()
+    def cancel(self):
+        return self._cf.cancel()
+    def add_done_callback(self, fn):
+        self._cf.add_done_callback(fn)
     @staticmethod
     def all(futures):
         concurrent.futures.wait([f._cf for f in futures])
+    @staticmethod
+    def first(futures):
+        return concurrent.futures.wait([f._cf for f in futures], return_when=concurrent.futures.FIRST_COMPLETED)
 
 class Path:
     def __init__(self, path):
@@ -1330,6 +1637,8 @@ class Path:
         return os.path.isfile(self._path)
     def is_dir(self):
         return os.path.isdir(self._path)
+    def is_absolute(self):
+        return os.path.isabs(self._path)
     def size(self):
         return os.path.getsize(self._path)
     def name(self):
@@ -1345,12 +1654,16 @@ class Path:
     def resolve(self):
         return Path(os.path.abspath(self._path))
     def glob(self, pattern):
-        return glob.glob(os.path.join(self._path, pattern))
+        return [Path(p) for p in glob.glob(os.path.join(self._path, pattern))]
+    def rglob(self, pattern):
+        return [Path(p) for p in glob.glob(os.path.join(self._path, '**', pattern), recursive=True)]
     def mkdir(self, exist_ok=True):
         os.makedirs(self._path, exist_ok=exist_ok)
     def remove(self):
         if self.is_file(): os.remove(self._path)
         elif self.is_dir(): shutil.rmtree(self._path)
+    def rename(self, new_name):
+        os.rename(self._path, new_name)
     def __str__(self):
         return self._path
     def __repr__(self):
@@ -1405,10 +1718,17 @@ class Enumerable:
         return Enumerable(filter(predicate, self._seq))
     def select(self, selector):
         return Enumerable(map(selector, self._seq))
+    def select_many(self, selector):
+        result = []
+        for item in self._seq:
+            result.extend(selector(item))
+        return Enumerable(result)
     def order_by(self, key):
         return Enumerable(sorted(self._seq, key=key))
     def order_by_desc(self, key):
         return Enumerable(sorted(self._seq, key=key, reverse=True))
+    def then_by(self, key):
+        return Enumerable(sorted(self._seq, key=lambda x: (self._get_key(x), key(x))))
     def first(self, predicate=None):
         for item in self._seq:
             if predicate is None or predicate(item):
@@ -1419,6 +1739,16 @@ class Enumerable:
             return self.first(predicate)
         except ValueError:
             return default
+    def last(self, predicate=None):
+        result = None
+        found = False
+        for item in self._seq:
+            if predicate is None or predicate(item):
+                result = item
+                found = True
+        if not found:
+            raise ValueError("No element")
+        return result
     def count(self, predicate=None):
         if predicate:
             return sum(1 for x in self._seq if predicate(x))
@@ -1454,6 +1784,11 @@ class Enumerable:
         return Enumerable(list(it))
     def take(self, n):
         return Enumerable(list(itertools.islice(self._seq, n)))
+    def group_by(self, key_selector):
+        result = defaultdict(list)
+        for item in self._seq:
+            result[key_selector(item)].append(item)
+        return Enumerable(result.items())
 
 class Promise:
     PENDING = 'pending'
@@ -1497,18 +1832,15 @@ class Promise:
         return Promise(lambda _, rej: rej(reason))
     @staticmethod
     def all(promises):
-        results = [None] * len(promises)
-        completed = 0
-        def handler(i, res):
-            nonlocal completed
-            results[i] = res
-            completed += 1
-            if completed == len(promises):
-                future.set_result(results)
-        future = concurrent.futures.Future()
-        for i, p in enumerate(promises):
-            p.then(lambda r, i=i: handler(i, r), future.set_exception)
-        return Promise(lambda res, rej: None)
+        def handler(res, rej):
+            results = [None] * len(promises)
+            completed = 0
+            for i, p in enumerate(promises):
+                p.then(
+                    lambda r, i=i: (results.__setitem__(i, r), (completed := completed + 1) or (completed == len(promises) and res(results))),
+                    rej
+                )
+        return Promise(handler)
 
 class Iterator:
     def __init__(self, data):
@@ -1557,8 +1889,11 @@ class Template:
     @staticmethod
     def swap(a, b):
         return b, a
+    @staticmethod
+    def clamp(value, lo, hi):
+        return max(lo, min(value, hi))
 
-# ==================== 13. 文件 ====================
+# ==================== 13. 文件工具类 ====================
 
 class File:
     @staticmethod
@@ -1592,11 +1927,28 @@ class File:
             return f"[错误: {e}]"
     
     @staticmethod
+    def read_binary(filepath):
+        full = File.get_abs_path(filepath)
+        with open(full, 'rb') as f:
+            return f.read()
+    
+    @staticmethod
     def write(filepath, content, encoding='utf-8'):
         full = File.get_abs_path(filepath)
         try:
             os.makedirs(os.path.dirname(full) or '.', exist_ok=True)
             with open(full, 'w', encoding=encoding) as f:
+                f.write(content)
+            return True
+        except:
+            return False
+    
+    @staticmethod
+    def write_binary(filepath, content):
+        full = File.get_abs_path(filepath)
+        try:
+            os.makedirs(os.path.dirname(full) or '.', exist_ok=True)
+            with open(full, 'wb') as f:
                 f.write(content)
             return True
         except:
@@ -1646,7 +1998,7 @@ class File:
         try:
             src_full = File.get_abs_path(src)
             dst_full = File.get_abs_path(dst)
-            if os.path.isdir(src_full): shutil.copytree(src_full, dst_full)
+            if os.path.isdir(src_full): shutil.copytree(src_full, dst_full, dirs_exist_ok=True)
             else: shutil.copy2(src_full, dst_full)
             return True
         except:
@@ -1680,8 +2032,26 @@ class File:
         for root, dirs, files in os.walk(full):
             result.append((root, dirs, files))
         return result
+    
+    @staticmethod
+    def touch(filepath):
+        full = File.get_abs_path(filepath)
+        os.makedirs(os.path.dirname(full) or '.', exist_ok=True)
+        with open(full, 'a'):
+            os.utime(full, None)
+        return True
+    
+    @staticmethod
+    def get_mtime(filepath):
+        full = File.get_abs_path(filepath)
+        return os.path.getmtime(full) if os.path.exists(full) else None
+    
+    @staticmethod
+    def get_ctime(filepath):
+        full = File.get_abs_path(filepath)
+        return os.path.getctime(full) if os.path.exists(full) else None
 
-# ==================== 14. 字符串 ====================
+# ==================== 14. 字符串工具类 ====================
 
 class String:
     @staticmethod
@@ -1717,25 +2087,72 @@ class String:
         parts = re.split(r'[_-]+', s)
         return parts[0] + ''.join(p.capitalize() for p in parts[1:])
     @staticmethod
+    def to_kebab_case(s):
+        return String.to_snake_case(s).replace('_', '-')
+    @staticmethod
     def is_email(s):
         pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
         return re.match(pattern, s) is not None
     @staticmethod
     def is_url(s):
-        pattern = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
+        pattern = r'^https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(?::\d+)?(?:/[-\w./?%&=]*)?$'
         return re.match(pattern, s) is not None
     @staticmethod
     def is_phone(s):
         pattern = r'^1[3-9]\d{9}$'
         return re.match(pattern, s) is not None
+    @staticmethod
+    def is_ipv4(s):
+        pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+        if not re.match(pattern, s):
+            return False
+        return all(0 <= int(x) <= 255 for x in s.split('.'))
+    @staticmethod
+    def is_ipv6(s):
+        try:
+            socket.inet_pton(socket.AF_INET6, s)
+            return True
+        except:
+            return False
+    @staticmethod
+    def pretty_json(obj):
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+    @staticmethod
+    def pretty_xml(xml_str, indent=2):
+        try:
+            import xml.dom.minidom
+            dom = xml.dom.minidom.parseString(xml_str)
+            return dom.toprettyxml(indent=" " * indent)
+        except:
+            return xml_str
+    @staticmethod
+    def wrap(text, width=80):
+        return textwrap.fill(text, width=width)
+    @staticmethod
+    def indent(text, prefix='    '):
+        return '\n'.join(prefix + line for line in text.splitlines())
+    @staticmethod
+    def strip_html(text):
+        return re.sub(r'<[^>]+>', '', text)
+    @staticmethod
+    def escape_html(text):
+        return html.escape(text)
+    @staticmethod
+    def unescape_html(text):
+        return html.unescape(text)
+    @staticmethod
+    def slugify(text):
+        text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode()
+        text = re.sub(r'[^\w\s-]', '', text).strip().lower()
+        return re.sub(r'[-\s]+', '-', text)
 
-# ==================== 15. 网络 ====================
+# ==================== 15. 网络工具类 ====================
 
 class Network:
     @staticmethod
     def get(url, timeout=30):
         try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/4.1'})
+            req = urllib.request.Request(url, headers={'User-Agent': 'PWOS3/5.0'})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return resp.read().decode('utf-8')
         except:
@@ -1779,8 +2196,45 @@ class Network:
             if ip not in ips:
                 ips.append(ip)
         return ips
+    @staticmethod
+    def port_open(host, port, timeout=3):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except:
+            return False
+    @staticmethod
+    def get_public_ip(timeout=10):
+        try:
+            return Network.get('https://api.ipify.org', timeout)
+        except:
+            return None
+    @staticmethod
+    def whois(domain):
+        try:
+            import whois
+            return whois.whois(domain)
+        except ImportError:
+            return None
+    @staticmethod
+    def scan_ports(host, ports, timeout=1):
+        """扫描指定端口列表"""
+        results = {}
+        for port in ports:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                result = sock.connect_ex((host, port))
+                results[port] = (result == 0)
+                sock.close()
+            except:
+                results[port] = False
+        return results
 
-# ==================== 16. 数学 ====================
+# ==================== 16. 数学工具类 ====================
 
 class MathUtil:
     @staticmethod
@@ -1836,16 +2290,49 @@ class MathUtil:
             if n % i == 0:
                 return False
         return True
+    @staticmethod
+    def primes_upto(n):
+        sieve = [True] * (n + 1)
+        sieve[0] = sieve[1] = False
+        for i in range(2, int(n**0.5) + 1):
+            if sieve[i]:
+                for j in range(i*i, n+1, i):
+                    sieve[j] = False
+        return [i for i, is_prime in enumerate(sieve) if is_prime]
+    @staticmethod
+    def fib(n):
+        a, b = 0, 1
+        for _ in range(n):
+            a, b = b, a + b
+        return a
+    @staticmethod
+    def combination(n, k):
+        return math.comb(n, k)
+    @staticmethod
+    def permutation(n, k):
+        return math.perm(n, k)
+    @staticmethod
+    def distance_2d(x1, y1, x2, y2):
+        return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+    @staticmethod
+    def angle_2d(x1, y1, x2, y2):
+        return math.atan2(y2 - y1, x2 - x1)
 
-# ==================== 17. 时间日期 ====================
+# ==================== 17. 时间日期工具类 ====================
 
 class TimeDate:
     @staticmethod
     def now(fmt="%Y-%m-%d %H:%M:%S"):
         return datetime.datetime.now().strftime(fmt)
     @staticmethod
+    def today(fmt="%Y-%m-%d"):
+        return datetime.datetime.now().strftime(fmt)
+    @staticmethod
     def timestamp():
         return int(time.time())
+    @staticmethod
+    def timestamp_ms():
+        return int(time.time() * 1000)
     @staticmethod
     def from_timestamp(ts, fmt="%Y-%m-%d %H:%M:%S"):
         return datetime.datetime.fromtimestamp(ts).strftime(fmt)
@@ -1860,8 +2347,34 @@ class TimeDate:
     def add_days(date_str, days, fmt="%Y-%m-%d %H:%M:%S"):
         dt = datetime.datetime.strptime(date_str, fmt)
         return (dt + datetime.timedelta(days=days)).strftime(fmt)
+    @staticmethod
+    def add_hours(date_str, hours, fmt="%Y-%m-%d %H:%M:%S"):
+        dt = datetime.datetime.strptime(date_str, fmt)
+        return (dt + datetime.timedelta(hours=hours)).strftime(fmt)
+    @staticmethod
+    def format_duration(seconds):
+        days = int(seconds // 86400)
+        hours = int((seconds % 86400) // 3600)
+        minutes = int((seconds % 3600) // 60)
+        secs = int(seconds % 60)
+        if days > 0:
+            return f"{days}d {hours}h {minutes}m {secs}s"
+        elif hours > 0:
+            return f"{hours}h {minutes}m {secs}s"
+        elif minutes > 0:
+            return f"{minutes}m {secs}s"
+        else:
+            return f"{secs}s"
+    @staticmethod
+    def is_weekend(date_str, fmt="%Y-%m-%d"):
+        dt = datetime.datetime.strptime(date_str, fmt)
+        return dt.weekday() >= 5
+    @staticmethod
+    def week_number(date_str, fmt="%Y-%m-%d"):
+        dt = datetime.datetime.strptime(date_str, fmt)
+        return dt.isocalendar()[1]
 
-# ==================== 18. 随机 ====================
+# ==================== 18. 随机工具类 ====================
 
 class RandomUtil:
     @staticmethod
@@ -1889,10 +2402,28 @@ class RandomUtil:
         colors = ['red', 'green', 'yellow', 'blue', 'magenta', 'cyan']
         return random.choice(colors)
     @staticmethod
+    def hex_color():
+        return f"#{random.randint(0, 0xFFFFFF):06x}"
+    @staticmethod
     def uuid():
         return str(_uuid.uuid4())
+    @staticmethod
+    def uuid4():
+        return _uuid.uuid4()
+    @staticmethod
+    def name():
+        first_names = ['Alice', 'Bob', 'Charlie', 'David', 'Eve', 'Frank', 'Grace', 'Henry', 'Ivy', 'Jack']
+        last_names = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller', 'Davis', 'Rodriguez', 'Martinez']
+        return f"{random.choice(first_names)} {random.choice(last_names)}"
+    @staticmethod
+    def email():
+        domains = ['gmail.com', 'yahoo.com', 'outlook.com', 'example.com', 'test.com']
+        return f"{RandomUtil.string(8).lower()}@{random.choice(domains)}"
+    @staticmethod
+    def string(length=8):
+        return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
-# ==================== 19. 颜色 ====================
+# ==================== 19. 颜色工具类 ====================
 
 class Color:
     @staticmethod
@@ -1961,8 +2492,17 @@ class Color:
     @staticmethod
     def info(text):
         return f"\033[96;1m[INFO] {text}\033[0m"
+    @staticmethod
+    def debug(text):
+        return f"\033[90;1m[DEBUG] {text}\033[0m"
+    @staticmethod
+    def rgb(r, g, b, text):
+        return f"\033[38;2;{r};{g};{b}m{text}\033[0m"
+    @staticmethod
+    def bg_rgb(r, g, b, text):
+        return f"\033[48;2;{r};{g};{b}m{text}\033[0m"
 
-# ==================== 20. 系统信息 ====================
+# ==================== 20. 系统信息类 ====================
 
 class SystemInfo:
     @staticmethod
@@ -2001,8 +2541,20 @@ class SystemInfo:
     @staticmethod
     def is_macos() -> bool:
         return platform.system() == "Darwin"
+    @staticmethod
+    def cpu_count() -> int:
+        return os.cpu_count() or 1
+    @staticmethod
+    def user() -> str:
+        return os.environ.get('USER', os.environ.get('USERNAME', 'unknown'))
+    @staticmethod
+    def home() -> str:
+        return os.path.expanduser('~')
+    @staticmethod
+    def cwd() -> str:
+        return os.getcwd()
 
-# ==================== 21. 实用工具 ====================
+# ==================== 21. 实用工具类 ====================
 
 class Utils:
     @staticmethod
@@ -2047,17 +2599,36 @@ class Utils:
     def unique_preserve_order(lst: List) -> List:
         seen = set()
         return [x for x in lst if not (x in seen or seen.add(x))]
+    @staticmethod
+    def open_browser(url):
+        webbrowser.open(url)
+    @staticmethod
+    def get_env(key, default=None):
+        return os.environ.get(key, default)
+    @staticmethod
+    def set_env(key, value):
+        os.environ[key] = value
+    @staticmethod
+    def is_interactive():
+        return sys.stdin.isatty()
+    @staticmethod
+    def exit_code(code=0):
+        sys.exit(code)
 
-# ==================== BFS/图论 ====================
+# ==================== BFS/图论扩展模块 ====================
 
 class GraphAlgo:
+    """图论算法扩展模块"""
+    
     @staticmethod
     def bfs_graph(graph, start, target, o=False):
         from collections import deque
         start_time = time.time()
+        
         queue = deque([(start, [start])])
         visited = {start}
         visited_count = 1
+        
         while queue:
             node, path = queue.popleft()
             if node == target:
@@ -2070,6 +2641,7 @@ class GraphAlgo:
                     visited.add(neighbor)
                     visited_count += 1
                     queue.append((neighbor, path + [neighbor]))
+        
         elapsed_ms = (time.time() - start_time) * 1000
         if o:
             return [], elapsed_ms, visited_count
@@ -2079,6 +2651,7 @@ class GraphAlgo:
     def bfs_grid(grid, start, target_value, o=False):
         from collections import deque
         start_time = time.time()
+        
         target = None
         for i in range(len(grid)):
             for j in range(len(grid[0])):
@@ -2087,15 +2660,18 @@ class GraphAlgo:
                     break
             if target:
                 break
+        
         if not target:
             if o:
                 return [], 0, 0
             return []
+        
         sx, sy = start
         queue = deque([(sx, sy, [(sx, sy)])])
         visited = {(sx, sy)}
         visited_count = 1
         directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+        
         while queue:
             cx, cy, path = queue.popleft()
             if (cx, cy) == target:
@@ -2110,6 +2686,7 @@ class GraphAlgo:
                         visited.add((nx, ny))
                         visited_count += 1
                         queue.append((nx, ny, path + [(nx, ny)]))
+        
         if o:
             return [], (time.time() - start_time) * 1000, visited_count
         return []
@@ -2127,9 +2704,11 @@ class GraphAlgo:
     @staticmethod
     def dfs(graph, start, target, o=False):
         start_time = time.time()
+        
         stack = [(start, [start])]
         visited = {start}
         visited_count = 1
+        
         while stack:
             node, path = stack.pop()
             if node == target:
@@ -2142,6 +2721,7 @@ class GraphAlgo:
                     visited.add(neighbor)
                     visited_count += 1
                     stack.append((neighbor, path + [neighbor]))
+        
         elapsed_ms = (time.time() - start_time) * 1000
         if o:
             return [], elapsed_ms, visited_count
@@ -2151,9 +2731,11 @@ class GraphAlgo:
     def dijkstra(graph, start, target, o=False):
         import heapq
         start_time = time.time()
+        
         pq = [(0, start, [start])]
         distances = {start: 0}
         visited_count = 1
+        
         while pq:
             dist, node, path = heapq.heappop(pq)
             if node == target:
@@ -2169,6 +2751,7 @@ class GraphAlgo:
                     distances[neighbor] = new_dist
                     visited_count += 1
                     heapq.heappush(pq, (new_dist, neighbor, path + [neighbor]))
+        
         elapsed_ms = (time.time() - start_time) * 1000
         if o:
             return [], -1, elapsed_ms, visited_count
@@ -2178,6 +2761,7 @@ class GraphAlgo:
     def has_cycle(graph):
         visited = set()
         rec_stack = set()
+        
         def dfs(node):
             visited.add(node)
             rec_stack.add(node)
@@ -2189,6 +2773,7 @@ class GraphAlgo:
                     return True
             rec_stack.remove(node)
             return False
+        
         for node in graph:
             if node not in visited:
                 if dfs(node):
@@ -2202,8 +2787,10 @@ class GraphAlgo:
         for node in graph:
             for neighbor in graph[node]:
                 in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+        
         queue = deque([node for node in graph if in_degree[node] == 0])
         result = []
+        
         while queue:
             node = queue.popleft()
             result.append(node)
@@ -2211,10 +2798,12 @@ class GraphAlgo:
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
                     queue.append(neighbor)
+        
         return result if len(result) == len(graph) else []
 
-# ==================== 22. 新增功能 ====================
+# ==================== 22. 新增功能模块 ====================
 
+# 22.1 ThreadPool - 线程池轻量封装
 class ThreadPool:
     def __init__(self, max_workers=None):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
@@ -2229,6 +2818,7 @@ class ThreadPool:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.shutdown()
 
+# 22.2 Cache - LRU/LFU 缓存，支持 TTL
 class Cache:
     def __init__(self, maxsize=128, ttl=None, policy='lru'):
         self.maxsize = maxsize
@@ -2271,6 +2861,7 @@ class Cache:
     def size(self):
         return len(self._cache)
 
+# 22.3 Retry - 重试装饰器
 def retry(max_attempts=3, delay=1, backoff=2, exceptions=(Exception,)):
     def decorator(func):
         @wraps(func)
@@ -2288,6 +2879,7 @@ def retry(max_attempts=3, delay=1, backoff=2, exceptions=(Exception,)):
         return wrapper
     return decorator
 
+# 22.4 RingBuffer - 循环队列
 class RingBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -2324,6 +2916,7 @@ class RingBuffer:
     def full(self):
         return self._size == self.capacity
 
+# 22.5 Stopwatch - 高精度计时器
 class Stopwatch:
     def __init__(self):
         self._start = None
@@ -2353,6 +2946,7 @@ class Stopwatch:
     def elapsed_us(self):
         return self.elapsed() * 1000000
 
+# 22.6 Lazy - 延迟求值
 class Lazy:
     def __init__(self, func):
         self._func = func
@@ -2369,6 +2963,7 @@ class Lazy:
         self._evaluated = False
         self._value = None
 
+# 22.7 CsvReader / CsvWriter
 class CsvReader:
     def __init__(self, filepath, delimiter=','):
         self.filepath = filepath
@@ -2402,6 +2997,7 @@ class CsvWriter:
     def writerows(self, rows):
         self._writer.writerows(rows)
 
+# 22.8 IniConfig - 轻量级 INI 读写
 class IniConfig:
     def __init__(self, filepath=None):
         self.filepath = filepath
@@ -2437,6 +3033,7 @@ class IniConfig:
             with open(path, 'w', encoding='utf-8') as f:
                 self._config.write(f)
 
+# 22.9 SortedSet - 有序集合
 class SortedSet:
     def __init__(self, iterable=None, key=None):
         self._data = []
@@ -2478,6 +3075,7 @@ class SortedSet:
     def to_list(self):
         return self._data.copy()
 
+# 22.10 Batched - 批量处理迭代器
 def Batched(iterable, size):
     it = iter(iterable)
     while True:
@@ -2486,6 +3084,7 @@ def Batched(iterable, size):
             break
         yield batch
 
+# 22.11 Profiler - 上下文管理器性能分析
 class Profiler:
     def __init__(self, name="block"):
         self.name = name
@@ -2499,6 +3098,7 @@ class Profiler:
     def elapsed_ms(self):
         return self._sw.elapsed_ms()
 
+# 22.12 Zip - 并行迭代器
 def Zip(*iterables, fill=None):
     iters = [iter(it) for it in iterables]
     while True:
@@ -2512,10 +3112,12 @@ def Zip(*iterables, fill=None):
             break
         yield tuple(result)
 
+# 22.13 Tee - 复制流
 def Tee(iterator, n=2):
     from itertools import tee
     return tee(iterator, n)
 
+# 22.14 EventBus - 观察者模式事件总线
 class EventBus:
     def __init__(self):
         self._listeners = defaultdict(list)
@@ -2533,6 +3135,7 @@ class EventBus:
         else:
             self._listeners.clear()
 
+# 22.15 Semaphore - 信号量
 class Semaphore:
     def __init__(self, value=1):
         self._sem = threading.Semaphore(value)
@@ -2546,6 +3149,7 @@ class Semaphore:
     def __exit__(self, *args):
         self.release()
 
+# 22.16 MemoryPool - 内存池
 class MemoryPool:
     def __init__(self, object_type, capacity=100):
         self.object_type = object_type
@@ -2567,6 +3171,7 @@ class MemoryPool:
     def allocated_count(self):
         return self._allocated
 
+# 22.17 BitField - 位域读写
 class BitField:
     def __init__(self, value=0, bits=32):
         self._value = value & ((1 << bits) - 1)
@@ -2590,487 +3195,1034 @@ class BitField:
     def __int__(self):
         return self._value
 
-# ==================== 23. IO 硬件控制 (完整版) ====================
+# ==================== 23. 全新功能模块 ====================
 
-class IOPortType:
-    """端口类型枚举 - 覆盖所有已知接口"""
-    # GPIO
-    GPIO = "gpio"
-    GPIO_BCM = "gpio_bcm"
-    GPIO_WIRING = "gpio_wiring"
-    GPIO_SYSFS = "gpio_sysfs"
-    
-    # I2C
-    I2C = "i2c"
-    I2C_SMBUS = "i2c_smbus"
-    I2C_DEV = "i2c_dev"
-    
-    # SPI
-    SPI = "spi"
-    SPI_DEV = "spi_dev"
-    
-    # UART
-    UART = "uart"
-    UART_TTY = "uart_tty"
-    UART_USB = "uart_usb"
-    
-    # USB
-    USB = "usb"
-    USB_HOST = "usb_host"
-    USB_OTG = "usb_otg"
-    USB_DEVICE = "usb_device"
-    
-    # PCIe
-    PCIE = "pcie"
-    PCIE_X1 = "pcie_x1"
-    PCIE_X4 = "pcie_x4"
-    PCIE_X8 = "pcie_x8"
-    PCIE_X16 = "pcie_x16"
-    PCIE_MINI = "pcie_mini"
-    PCIE_M2 = "pcie_m2"
-    
-    # 摄像头
-    CSI = "csi"
-    CSI_0 = "csi0"
-    CSI_1 = "csi1"
-    CSI_2 = "csi2"
-    USB_CAM = "usb_cam"
-    IP_CAM = "ip_cam"
-    HDMI_CAM = "hdmi_cam"
-    
-    # 显示
-    DSI = "dsi"
-    HDMI = "hdmi"
-    DP = "dp"
-    VGA = "vga"
-    LVDS = "lvds"
-    EDP = "edp"
-    
-    # 音频
-    AUDIO = "audio"
-    AUDIO_HDMI = "audio_hdmi"
-    AUDIO_USB = "audio_usb"
-    AUDIO_I2S = "audio_i2s"
-    AUDIO_PCM = "audio_pcm"
-    
-    # 存储
-    STORAGE = "storage"
-    SATA = "sata"
-    NVME = "nvme"
-    EMMC = "emmc"
-    SDIO = "sdio"
-    SDMMC = "sdmmc"
-    
-    # AI 加速
-    AI = "ai"
-    AI_PCIE = "ai_pcie"
-    AI_USB = "ai_usb"
-    AI_M2 = "ai_m2"
-    AI_NPU = "ai_npu"
-    AI_TPU = "ai_tpu"
-    AI_CORAL = "ai_coral"
-    
-    # 网络
-    ETH = "eth"
-    WIFI = "wifi"
-    BT = "bt"
-    LTE = "lte"
-    CAN = "can"
-    RS485 = "rs485"
-    RS232 = "rs232"
-    
-    # 传感器
-    SENSOR = "sensor"
-    SENSOR_I2C = "sensor_i2c"
-    SENSOR_SPI = "sensor_spi"
-    SENSOR_GPIO = "sensor_gpio"
-    SENSOR_ANALOG = "sensor_analog"
-    
-    # 电机
-    MOTOR = "motor"
-    SERVO = "servo"
-    STEPPER = "stepper"
-    DC_MOTOR = "dc_motor"
-    BRUSHLESS = "brushless"
-    
-    # 开发板专用
-    JETSON_GPIO = "jetson_gpio"
-    JETSON_CAM = "jetson_cam"
-    ORANGE_PI_GPIO = "orange_gpio"
-    ROCKCHIP_GPIO = "rockchip_gpio"
-    ALLWINNER_GPIO = "allwinner_gpio"
-    BANANA_PI_GPIO = "banana_pi_gpio"
-    
-    # ESP32/Arduino
-    ESP32_UART = "esp32_uart"
-    ESP32_SPI = "esp32_spi"
-    ESP32_I2C = "esp32_i2c"
-    ARDUINO_UART = "arduino_uart"
-    ARDUINO_I2C = "arduino_i2c"
-    ARDUINO_SPI = "arduino_spi"
-    
-    # 虚拟
-    VIRTUAL = "virtual"
-    SIMULATOR = "simulator"
-    DEBUG = "debug"
-    UNKNOWN = "unknown"
+# 23.1 Task - 简易异步任务
+class Task:
+    def __init__(self, func, *args, **kwargs):
+        self._func = func
+        self._args = args
+        self._kwargs = kwargs
+        self._future = None
+        self._done = False
+        self._result = None
+        self._error = None
+    def start(self):
+        if self._future is None:
+            self._future = AsyncExecutor.run(self._run)
+        return self
+    def _run(self):
+        try:
+            self._result = self._func(*self._args, **self._kwargs)
+            self._done = True
+        except Exception as e:
+            self._error = e
+            self._done = True
+    def get(self, timeout=None):
+        if self._future is None:
+            self.start()
+        self._future.wait(timeout)
+        if self._error:
+            raise self._error
+        return self._result
+    def is_done(self):
+        return self._done
+    def wait(self, timeout=None):
+        self.get(timeout)
+        return self
 
-class _PortAlias:
-    """端口别名映射"""
-    ALIASES = {
-        # GPIO
-        "gpio": IOPortType.GPIO, "gpio0": IOPortType.GPIO, "gpio1": IOPortType.GPIO,
-        "gpio_bcm": IOPortType.GPIO_BCM, "bcm": IOPortType.GPIO_BCM,
-        "gpio_wiring": IOPortType.GPIO_WIRING, "wiring": IOPortType.GPIO_WIRING,
-        "gpio_sysfs": IOPortType.GPIO_SYSFS, "sysfs": IOPortType.GPIO_SYSFS,
-        # I2C
-        "i2c": IOPortType.I2C, "i2c0": IOPortType.I2C, "i2c1": IOPortType.I2C,
-        "i2c_smbus": IOPortType.I2C_SMBUS, "smbus": IOPortType.I2C_SMBUS,
-        "i2c_dev": IOPortType.I2C_DEV,
-        # SPI
-        "spi": IOPortType.SPI, "spi0": IOPortType.SPI, "spi1": IOPortType.SPI,
-        "spi_dev": IOPortType.SPI_DEV,
-        # UART
-        "uart": IOPortType.UART, "uart0": IOPortType.UART, "uart1": IOPortType.UART,
-        "tty": IOPortType.UART_TTY, "ttyAMA": IOPortType.UART_TTY,
-        "ttyS": IOPortType.UART_TTY, "ttyUSB": IOPortType.UART_USB,
-        # USB
-        "usb": IOPortType.USB, "usb0": IOPortType.USB, "usb1": IOPortType.USB,
-        "usb2": IOPortType.USB, "usb3": IOPortType.USB,
-        "usb_host": IOPortType.USB_HOST, "usb_otg": IOPortType.USB_OTG,
-        "usb_device": IOPortType.USB_DEVICE,
-        # PCIe
-        "pcie": IOPortType.PCIE, "pcie0": IOPortType.PCIE, "pcie1": IOPortType.PCIE,
-        "pcie_x1": IOPortType.PCIE_X1, "pcie_x4": IOPortType.PCIE_X4,
-        "pcie_x8": IOPortType.PCIE_X8, "pcie_x16": IOPortType.PCIE_X16,
-        "pcie_mini": IOPortType.PCIE_MINI, "mini_pcie": IOPortType.PCIE_MINI,
-        "pcie_m2": IOPortType.PCIE_M2, "m2": IOPortType.PCIE_M2, "m.2": IOPortType.PCIE_M2,
-        # 摄像头
-        "csi": IOPortType.CSI, "csi0": IOPortType.CSI_0, "csi1": IOPortType.CSI_1,
-        "csi2": IOPortType.CSI_2, "camera": IOPortType.CSI, "cam": IOPortType.CSI,
-        "cam0": IOPortType.CSI_0, "cam1": IOPortType.CSI_1,
-        "usb_cam": IOPortType.USB_CAM, "usbcam": IOPortType.USB_CAM,
-        "ip_cam": IOPortType.IP_CAM, "ipcam": IOPortType.IP_CAM,
-        "hdmi_cam": IOPortType.HDMI_CAM, "hdmicam": IOPortType.HDMI_CAM,
-        # 显示
-        "dsi": IOPortType.DSI, "dsi0": IOPortType.DSI, "display": IOPortType.DSI,
-        "hdmi": IOPortType.HDMI, "hdmi0": IOPortType.HDMI, "hdmi1": IOPortType.HDMI,
-        "dp": IOPortType.DP, "dp0": IOPortType.DP,
-        "vga": IOPortType.VGA, "lvds": IOPortType.LVDS, "edp": IOPortType.EDP,
-        # 音频
-        "audio": IOPortType.AUDIO, "audio0": IOPortType.AUDIO,
-        "hdmi_audio": IOPortType.AUDIO_HDMI, "usb_audio": IOPortType.AUDIO_USB,
-        "i2s": IOPortType.AUDIO_I2S, "pcm": IOPortType.AUDIO_PCM,
-        # 存储
-        "storage": IOPortType.STORAGE, "sata": IOPortType.SATA,
-        "nvme": IOPortType.NVME, "emmc": IOPortType.EMMC,
-        "sdio": IOPortType.SDIO, "sdmmc": IOPortType.SDMMC,
-        # AI
-        "ai": IOPortType.AI, "ai0": IOPortType.AI,
-        "ai_pcie": IOPortType.AI_PCIE, "ai_usb": IOPortType.AI_USB,
-        "ai_m2": IOPortType.AI_M2, "npu": IOPortType.AI_NPU,
-        "tpu": IOPortType.AI_TPU, "coral": IOPortType.AI_CORAL,
-        "edge_tpu": IOPortType.AI_CORAL,
-        # 网络
-        "eth": IOPortType.ETH, "eth0": IOPortType.ETH, "ethernet": IOPortType.ETH,
-        "wifi": IOPortType.WIFI, "wlan": IOPortType.WIFI, "wlan0": IOPortType.WIFI,
-        "bt": IOPortType.BT, "bluetooth": IOPortType.BT,
-        "lte": IOPortType.LTE, "4g": IOPortType.LTE, "5g": IOPortType.LTE,
-        "can": IOPortType.CAN, "can0": IOPortType.CAN,
-        "rs485": IOPortType.RS485, "rs232": IOPortType.RS232,
-        # 传感器
-        "sensor": IOPortType.SENSOR,
-        "sensor_i2c": IOPortType.SENSOR_I2C,
-        "sensor_spi": IOPortType.SENSOR_SPI,
-        "sensor_gpio": IOPortType.SENSOR_GPIO,
-        "analog": IOPortType.SENSOR_ANALOG,
-        # 电机
-        "motor": IOPortType.MOTOR, "servo": IOPortType.SERVO,
-        "stepper": IOPortType.STEPPER, "dc_motor": IOPortType.DC_MOTOR,
-        "brushless": IOPortType.BRUSHLESS,
-        # 开发板
-        "jetson_gpio": IOPortType.JETSON_GPIO, "jetson": IOPortType.JETSON_GPIO,
-        "jetson_cam": IOPortType.JETSON_CAM,
-        "orange_gpio": IOPortType.ORANGE_PI_GPIO, "orange_pi": IOPortType.ORANGE_PI_GPIO,
-        "orange": IOPortType.ORANGE_PI_GPIO,
-        "rockchip_gpio": IOPortType.ROCKCHIP_GPIO, "rockchip": IOPortType.ROCKCHIP_GPIO,
-        "rk": IOPortType.ROCKCHIP_GPIO,
-        "allwinner_gpio": IOPortType.ALLWINNER_GPIO, "allwinner": IOPortType.ALLWINNER_GPIO,
-        "aw": IOPortType.ALLWINNER_GPIO,
-        "banana_pi": IOPortType.BANANA_PI_GPIO, "banana": IOPortType.BANANA_PI_GPIO,
-        # ESP32/Arduino
-        "esp32": IOPortType.ESP32_UART, "esp32_uart": IOPortType.ESP32_UART,
-        "esp32_spi": IOPortType.ESP32_SPI, "esp32_i2c": IOPortType.ESP32_I2C,
-        "arduino": IOPortType.ARDUINO_UART, "arduino_uart": IOPortType.ARDUINO_UART,
-        "arduino_i2c": IOPortType.ARDUINO_I2C, "arduino_spi": IOPortType.ARDUINO_SPI,
-        # 虚拟
-        "virtual": IOPortType.VIRTUAL, "sim": IOPortType.SIMULATOR,
-        "debug": IOPortType.DEBUG,
-    }
-
-class _DeviceInfo:
-    """设备信息"""
-    def __init__(self, id, name, port_type, port_spec, driver, available=False, 
-                 forced=False, aliases=None, metadata=None, error=None):
-        self.id = id
-        self.name = name
-        self.port_type = port_type
-        self.port_spec = port_spec
-        self.driver = driver
-        self.available = available
-        self.forced = forced
-        self.aliases = aliases or []
-        self.metadata = metadata or {}
-        self.error = error
-
-class _PortBinder:
-    """端口绑定器 - 支持 su 强制绑定"""
-    @staticmethod
-    def parse(port_spec):
-        port_spec = port_spec.lower().strip()
-        is_forced = port_spec.startswith('su')
-        if is_forced:
-            port_spec = port_spec[2:]
-        port_type = _PortAlias.ALIASES.get(port_spec)
-        if port_type is None:
-            for alias, ptype in _PortAlias.ALIASES.items():
-                if port_spec.startswith(alias):
-                    rest = port_spec[len(alias):]
-                    if rest == '' or rest.isdigit():
-                        port_type = ptype
-                        break
-        return is_forced, port_spec, port_type
-    
-    @staticmethod
-    def bind(port_spec, device_list):
-        is_forced, port, port_type = _PortBinder.parse(port_spec)
-        matched = None
-        for dev in device_list:
-            if dev.port_spec == port or port in dev.aliases:
-                matched = dev
-                break
-        if matched:
-            if not is_forced:
-                if matched.port_type == port_type or port_type is None:
-                    return matched
-                matched.error = f"类型不匹配: 设备是 {matched.port_type.value}, 请求 {port_type.value if port_type else '未知'}"
+# 23.2 Trie - 前缀树
+class Trie:
+    def __init__(self):
+        self._root = {}
+    def insert(self, word, value=None):
+        node = self._root
+        for ch in word:
+            if ch not in node:
+                node[ch] = {}
+            node = node[ch]
+        node['__end__'] = value if value is not None else True
+    def search(self, word):
+        node = self._root
+        for ch in word:
+            if ch not in node:
                 return None
-            matched.forced = True
-            return matched
-        if is_forced:
-            return _DeviceInfo(
-                id=f"virtual_{port}",
-                name=f"虚拟设备 ({port})",
-                port_type=port_type or IOPortType.VIRTUAL,
-                port_spec=port,
-                driver="virtual",
-                available=True,
-                forced=True,
-                aliases=[port],
-                metadata={"is_virtual": True}
-            )
+            node = node[ch]
+        return node.get('__end__')
+    def starts_with(self, prefix):
+        node = self._root
+        for ch in prefix:
+            if ch not in node:
+                return []
+            node = node[ch]
+        return self._collect(node, prefix)
+    def _collect(self, node, prefix):
+        results = []
+        if '__end__' in node:
+            results.append(prefix)
+        for ch, child in node.items():
+            if ch != '__end__':
+                results.extend(self._collect(child, prefix + ch))
+        return results
+    def remove(self, word):
+        def _remove(node, word, depth):
+            if depth == len(word):
+                if '__end__' in node:
+                    del node['__end__']
+                return len(node) == 0
+            ch = word[depth]
+            if ch not in node:
+                return False
+            should_delete = _remove(node[ch], word, depth + 1)
+            if should_delete:
+                del node[ch]
+            return len(node) == 0
+        _remove(self._root, word, 0)
+
+# 23.3 BloomFilter - 布隆过滤器
+class BloomFilter:
+    def __init__(self, capacity=1000, error_rate=0.001):
+        self.capacity = capacity
+        self.error_rate = error_rate
+        self._size = self._optimal_size(capacity, error_rate)
+        self._hash_count = self._optimal_hash_count(capacity, self._size)
+        self._bits = BitField(0, self._size)
+    def _optimal_size(self, n, p):
+        import math
+        return int(-n * math.log(p) / (math.log(2) ** 2))
+    def _optimal_hash_count(self, n, m):
+        import math
+        return int((m / n) * math.log(2))
+    def _hashes(self, item):
+        h1 = hashlib.md5(item.encode()).hexdigest()
+        h2 = hashlib.sha256(item.encode()).hexdigest()
+        return [int(h1[i:i+4], 16) % self._size for i in range(0, 16, 4)] + \
+               [int(h2[i:i+4], 16) % self._size for i in range(0, 16, 4)]
+    def add(self, item):
+        for pos in self._hashes(item)[:self._hash_count]:
+            self._bits.set(pos, True)
+    def contains(self, item):
+        for pos in self._hashes(item)[:self._hash_count]:
+            if not self._bits.get(pos):
+                return False
+        return True
+    def clear(self):
+        self._bits = BitField(0, self._size)
+    def size(self):
+        return self._size
+
+# 23.4 RateLimiter - 令牌桶限流器
+class RateLimiter:
+    def __init__(self, max_tokens=10, refill_rate=1):
+        self.max_tokens = max_tokens
+        self.refill_rate = refill_rate
+        self._tokens = max_tokens
+        self._last_refill = time.time()
+        self._lock = threading.Lock()
+    def _refill(self):
+        now = time.time()
+        elapsed = now - self._last_refill
+        refill = elapsed * self.refill_rate
+        self._tokens = min(self.max_tokens, self._tokens + refill)
+        self._last_refill = now
+    def acquire(self, tokens=1, timeout=None):
+        start = time.time()
+        while True:
+            with self._lock:
+                self._refill()
+                if self._tokens >= tokens:
+                    self._tokens -= tokens
+                    return True
+            if timeout is not None and time.time() - start > timeout:
+                return False
+            time.sleep(0.01)
+    def try_acquire(self, tokens=1):
+        return self.acquire(tokens, timeout=0)
+    def reset(self):
+        with self._lock:
+            self._tokens = self.max_tokens
+            self._last_refill = time.time()
+
+# 23.5 Diff - 文本差异对比
+class Diff:
+    @staticmethod
+    def compare(text1, text2):
+        import difflib
+        lines1 = text1.splitlines()
+        lines2 = text2.splitlines()
+        differ = difflib.Differ()
+        return list(differ.compare(lines1, lines2))
+    @staticmethod
+    def unified_diff(text1, text2, fromfile='a', tofile='b'):
+        import difflib
+        lines1 = text1.splitlines()
+        lines2 = text2.splitlines()
+        return list(difflib.unified_diff(lines1, lines2, fromfile, tofile))
+    @staticmethod
+    def context_diff(text1, text2, fromfile='a', tofile='b'):
+        import difflib
+        lines1 = text1.splitlines()
+        lines2 = text2.splitlines()
+        return list(difflib.context_diff(lines1, lines2, fromfile, tofile))
+    @staticmethod
+    def similarity(text1, text2):
+        import difflib
+        return difflib.SequenceMatcher(None, text1, text2).ratio()
+    @staticmethod
+    def html_diff(text1, text2):
+        import difflib
+        lines1 = text1.splitlines()
+        lines2 = text2.splitlines()
+        return difflib.HtmlDiff().make_file(lines1, lines2)
+
+# 23.6 Levenshtein - 编辑距离
+class Levenshtein:
+    @staticmethod
+    def distance(s1, s2):
+        if len(s1) < len(s2):
+            return Levenshtein.distance(s2, s1)
+        if not s2:
+            return len(s1)
+        prev = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1):
+            curr = [i + 1]
+            for j, c2 in enumerate(s2):
+                insert = curr[j] + 1
+                delete = prev[j + 1] + 1
+                replace = prev[j] + (c1 != c2)
+                curr.append(min(insert, delete, replace))
+            prev = curr
+        return prev[-1]
+    @staticmethod
+    def ratio(s1, s2):
+        dist = Levenshtein.distance(s1, s2)
+        max_len = max(len(s1), len(s2))
+        return 1 - (dist / max_len) if max_len > 0 else 1
+    @staticmethod
+    def fuzzy_match(s1, s2, threshold=0.8):
+        return Levenshtein.ratio(s1, s2) >= threshold
+
+# 23.7 HumanReadable - 人类可读格式
+class HumanReadable:
+    @staticmethod
+    def bytes(size):
+        units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        idx = 0
+        while size >= 1024 and idx < len(units) - 1:
+            size /= 1024
+            idx += 1
+        return f"{size:.1f} {units[idx]}"
+    @staticmethod
+    def time(seconds):
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes = seconds / 60
+        if minutes < 60:
+            return f"{minutes:.1f}m"
+        hours = minutes / 60
+        if hours < 24:
+            return f"{hours:.1f}h"
+        days = hours / 24
+        return f"{days:.1f}d"
+    @staticmethod
+    def number(num):
+        if num < 1000:
+            return str(num)
+        if num < 1000000:
+            return f"{num/1000:.1f}K"
+        if num < 1000000000:
+            return f"{num/1000000:.1f}M"
+        return f"{num/1000000000:.1f}B"
+    @staticmethod
+    def percent(value, total):
+        return f"{(value/total*100):.1f}%" if total > 0 else "0%"
+
+# 23.8 SemanticVersion - 语义化版本号
+class SemanticVersion:
+    def __init__(self, major=0, minor=0, patch=0, prerelease='', build=''):
+        self.major = major
+        self.minor = minor
+        self.patch = patch
+        self.prerelease = prerelease
+        self.build = build
+    def __str__(self):
+        ver = f"{self.major}.{self.minor}.{self.patch}"
+        if self.prerelease:
+            ver += f"-{self.prerelease}"
+        if self.build:
+            ver += f"+{self.build}"
+        return ver
+    def __lt__(self, other):
+        return self._cmp(other) < 0
+    def __eq__(self, other):
+        return self._cmp(other) == 0
+    def __le__(self, other):
+        return self._cmp(other) <= 0
+    def __gt__(self, other):
+        return self._cmp(other) > 0
+    def __ge__(self, other):
+        return self._cmp(other) >= 0
+    def _cmp(self, other):
+        if self.major != other.major:
+            return self.major - other.major
+        if self.minor != other.minor:
+            return self.minor - other.minor
+        if self.patch != other.patch:
+            return self.patch - other.patch
+        return 0
+    @staticmethod
+    def parse(version_str):
+        import re
+        pattern = r'^(\d+)\.(\d+)\.(\d+)(?:-([a-zA-Z0-9.-]+))?(?:\+([a-zA-Z0-9.-]+))?$'
+        match = re.match(pattern, version_str)
+        if not match:
+            raise ValueError(f"Invalid version: {version_str}")
+        return SemanticVersion(int(match[1]), int(match[2]), int(match[3]), match[4] or '', match[5] or '')
+
+# 23.9 ObservableList - 可观察列表
+class ObservableList:
+    def __init__(self, data=None):
+        self._data = list(data) if data else []
+        self._listeners = []
+    def on_change(self, callback):
+        self._listeners.append(callback)
+    def _notify(self, operation, *args):
+        for cb in self._listeners:
+            cb(operation, *args)
+    def append(self, item):
+        self._data.append(item)
+        self._notify('append', item)
+    def insert(self, index, item):
+        self._data.insert(index, item)
+        self._notify('insert', index, item)
+    def pop(self, index=-1):
+        item = self._data.pop(index)
+        self._notify('pop', index, item)
+        return item
+    def remove(self, item):
+        self._data.remove(item)
+        self._notify('remove', item)
+    def clear(self):
+        self._data.clear()
+        self._notify('clear')
+    def extend(self, items):
+        self._data.extend(items)
+        self._notify('extend', items)
+    def __getitem__(self, index):
+        return self._data[index]
+    def __setitem__(self, index, value):
+        self._data[index] = value
+        self._notify('set', index, value)
+    def __len__(self):
+        return len(self._data)
+    def __iter__(self):
+        return iter(self._data)
+    def to_list(self):
+        return self._data.copy()
+
+# 23.10 Event - 简单事件系统
+class Event:
+    def __init__(self):
+        self._handlers = []
+    def add(self, handler):
+        self._handlers.append(handler)
+    def remove(self, handler):
+        if handler in self._handlers:
+            self._handlers.remove(handler)
+    def trigger(self, *args, **kwargs):
+        for handler in self._handlers:
+            handler(*args, **kwargs)
+    def clear(self):
+        self._handlers.clear()
+
+# 23.11 Debounce - 防抖装饰器
+def debounce(wait):
+    def decorator(func):
+        _timer = None
+        def wrapper(*args, **kwargs):
+            nonlocal _timer
+            if _timer:
+                _timer.cancel()
+            _timer = threading.Timer(wait, lambda: func(*args, **kwargs))
+            _timer.start()
+        return wrapper
+    return decorator
+
+# 23.12 Throttle - 节流装饰器
+def throttle(wait):
+    def decorator(func):
+        _last_call = 0
+        def wrapper(*args, **kwargs):
+            nonlocal _last_call
+            now = time.time()
+            if now - _last_call >= wait:
+                _last_call = now
+                return func(*args, **kwargs)
+            return None
+        return wrapper
+    return decorator
+
+# 23.13 Timeout - 超时上下文
+@contextmanager
+def Timeout(seconds):
+    import signal
+    def handler(signum, frame):
+        raise TimeoutError(f"操作超时 ({seconds}秒)")
+    old_handler = signal.signal(signal.SIGALRM, handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+# 23.14 Lock - 锁上下文
+@contextmanager
+def Lock(lock):
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
+# 23.15 Atomic - 原子操作装饰器
+def atomic(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        with threading.Lock():
+            return func(*args, **kwargs)
+    return wrapper
+
+# 23.16 Singleton - 单例装饰器
+def singleton(cls):
+    instances = {}
+    @wraps(cls)
+    def get_instance(*args, **kwargs):
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+    return get_instance
+
+# 23.17 LazyCache - 懒加载缓存
+class LazyCache:
+    def __init__(self, loader):
+        self._loader = loader
+        self._cache = {}
+        self._lock = threading.Lock()
+    def get(self, key):
+        with self._lock:
+            if key not in self._cache:
+                self._cache[key] = self._loader(key)
+            return self._cache[key]
+    def invalidate(self, key):
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
+
+# 23.18 压缩工具
+def gzip_compress(data):
+    return gzip.compress(data.encode() if isinstance(data, str) else data)
+
+def gzip_decompress(data):
+    return gzip.decompress(data).decode()
+
+def zlib_compress(data):
+    return zlib.compress(data.encode() if isinstance(data, str) else data)
+
+def zlib_decompress(data):
+    return zlib.decompress(data).decode()
+
+# ==================== 24. 硬件控制模块 (新增) ====================
+
+class Hardware:
+    """硬件控制模块 - 支持 GPIO、串口、传感器等"""
+    
+    @staticmethod
+    def get_cpu_temperature():
+        """获取CPU温度 (支持 Windows/Linux/macOS)"""
+        try:
+            if platform.system() == "Windows":
+                try:
+                    import wmi
+                    c = wmi.WMI()
+                    for sensor in c.Win32_PerfFormattedData_Counters_ThermalZoneInformation():
+                        if hasattr(sensor, 'Temperature'):
+                            return sensor.Temperature / 10.0
+                except ImportError:
+                    pass
+                # 备用方案: 使用 psutil
+                try:
+                    import psutil
+                    return psutil.sensors_temperatures().get('coretemp', [{}])[0].current
+                except:
+                    return None
+            elif platform.system() == "Linux":
+                temp_files = [
+                    '/sys/class/thermal/thermal_zone0/temp',
+                    '/sys/class/hwmon/hwmon0/temp1_input',
+                    '/sys/class/hwmon/hwmon1/temp1_input'
+                ]
+                for path in temp_files:
+                    if os.path.exists(path):
+                        with open(path, 'r') as f:
+                            temp = int(f.read().strip()) / 1000.0
+                            return temp
+                return None
+            elif platform.system() == "Darwin":
+                try:
+                    import subprocess
+                    result = subprocess.run(['sysctl', 'hw.sensor.acpictp.temperature'], 
+                                          capture_output=True, text=True)
+                    if result.returncode == 0:
+                        return float(result.stdout.split()[-1])
+                except:
+                    pass
+                return None
+            return None
+        except:
+            return None
+    
+    @staticmethod
+    def get_gpu_info():
+        """获取GPU信息"""
+        try:
+            if platform.system() == "Windows":
+                try:
+                    import wmi
+                    c = wmi.WMI()
+                    for gpu in c.Win32_VideoController():
+                        return {
+                            'name': gpu.Name,
+                            'driver': gpu.DriverVersion,
+                            'memory': gpu.AdapterRAM
+                        }
+                except:
+                    pass
+            elif platform.system() == "Linux":
+                try:
+                    import subprocess
+                    result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
+                                          capture_output=True, text=True)
+                    if result.returncode == 0:
+                        parts = result.stdout.strip().split(',')
+                        return {'name': parts[0].strip(), 'memory': parts[1].strip()}
+                except:
+                    pass
+                try:
+                    import subprocess
+                    result = subprocess.run(['lspci', '-vnn'], capture_output=True, text=True)
+                    for line in result.stdout.split('\n'):
+                        if 'VGA' in line or '3D' in line:
+                            return {'name': line.strip()}
+                except:
+                    pass
+            return None
+        except:
+            return None
+    
+    @staticmethod
+    def get_battery_status():
+        """获取电池状态"""
+        try:
+            import psutil
+            battery = psutil.sensors_battery()
+            if battery:
+                return {
+                    'percent': battery.percent,
+                    'plugged': battery.power_plugged,
+                    'time_left': battery.secsleft if battery.secsleft != -1 else None
+                }
+        except:
+            pass
+        
+        # 备用方案: Windows API
+        if platform.system() == "Windows":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                
+                class SYSTEM_POWER_STATUS(ctypes.Structure):
+                    _fields_ = [
+                        ('ACLineStatus', ctypes.c_byte),
+                        ('BatteryFlag', ctypes.c_byte),
+                        ('BatteryLifePercent', ctypes.c_byte),
+                        ('Reserved1', ctypes.c_byte),
+                        ('BatteryLifeTime', wintypes.DWORD),
+                        ('BatteryFullLifeTime', wintypes.DWORD),
+                    ]
+                
+                power_status = SYSTEM_POWER_STATUS()
+                result = ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(power_status))
+                if result:
+                    return {
+                        'percent': power_status.BatteryLifePercent if power_status.BatteryLifePercent <= 100 else 100,
+                        'plugged': power_status.ACLineStatus == 1,
+                        'time_left': power_status.BatteryLifeTime if power_status.BatteryLifeTime != 0xFFFFFFFF else None
+                    }
+            except:
+                pass
         return None
-
-class _SystemDetector:
-    """系统检测器"""
+    
     @staticmethod
-    def detect():
-        info = {
-            "os": platform.system().lower(),
-            "arch": platform.machine(),
-            "processor": platform.processor(),
-            "board": "pc",
-            "board_model": "Unknown",
-            "features": {}
-        }
+    def get_disk_info():
+        """获取磁盘信息"""
+        result = []
         try:
-            with open('/proc/device-tree/model', 'r') as f:
-                model = f.read()
-                if 'Raspberry Pi' in model:
-                    info["board"] = "raspberry_pi"
-                elif 'Orange Pi' in model:
-                    info["board"] = "orange_pi"
-                elif 'NVIDIA Jetson' in model:
-                    info["board"] = "jetson"
-                elif 'Rockchip' in model:
-                    info["board"] = "rockchip"
-                elif 'Allwinner' in model:
-                    info["board"] = "allwinner"
-                elif 'Banana Pi' in model:
-                    info["board"] = "banana_pi"
-                info["board_model"] = model.strip()
+            import psutil
+            for partition in psutil.disk_partitions():
+                try:
+                    usage = psutil.disk_usage(partition.mountpoint)
+                    result.append({
+                        'device': partition.device,
+                        'mount': partition.mountpoint,
+                        'total': usage.total,
+                        'used': usage.used,
+                        'free': usage.free,
+                        'percent': usage.percent
+                    })
+                except:
+                    pass
         except:
             pass
-        
-        info["features"]["gpio"] = _HAS_RPI_GPIO
-        info["features"]["i2c"] = _HAS_SMBUS
-        info["features"]["spi"] = _HAS_SPIDEV
-        info["features"]["uart"] = _HAS_SERIAL
-        info["features"]["usb"] = _HAS_PYUSB
-        info["features"]["camera"] = _HAS_PICAMERA
-        info["features"]["opencv"] = _HAS_OPENCV
-        info["features"]["ai"] = _HAS_TORCH
-        return info
-
-class _DeviceScanner:
+        return result
+    
     @staticmethod
-    def scan(system_info):
+    def get_network_interfaces():
+        """获取网络接口信息"""
+        result = []
+        try:
+            import psutil
+            for interface, addrs in psutil.net_if_addrs().items():
+                for addr in addrs:
+                    if addr.family == socket.AF_INET:
+                        result.append({
+                            'interface': interface,
+                            'ip': addr.address,
+                            'netmask': addr.netmask
+                        })
+        except:
+            pass
+        return result
+    
+    @staticmethod
+    def get_system_load():
+        """获取系统负载"""
+        try:
+            import psutil
+            return {
+                'cpu_percent': psutil.cpu_percent(interval=0.1),
+                'cpu_count': psutil.cpu_count(),
+                'memory_percent': psutil.virtual_memory().percent,
+                'swap_percent': psutil.swap_memory().percent
+            }
+        except:
+            return None
+    
+    @staticmethod
+    def get_process_list(limit=20):
+        """获取进程列表"""
+        result = []
+        try:
+            import psutil
+            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+                try:
+                    info = proc.info
+                    result.append(info)
+                except:
+                    pass
+            result.sort(key=lambda x: x.get('cpu_percent', 0), reverse=True)
+            return result[:limit]
+        except:
+            return []
+    
+    @staticmethod
+    def get_screen_info():
+        """获取屏幕信息"""
+        try:
+            if platform.system() == "Windows":
+                import ctypes
+                user32 = ctypes.windll.user32
+                return {
+                    'width': user32.GetSystemMetrics(0),
+                    'height': user32.GetSystemMetrics(1),
+                }
+            elif platform.system() == "Linux":
+                try:
+                    import subprocess
+                    result = subprocess.run(['xdpyinfo'], capture_output=True, text=True)
+                    for line in result.stdout.split('\n'):
+                        if 'dimensions' in line:
+                            parts = line.split(':')[1].strip().split('x')
+                            return {'width': int(parts[0]), 'height': int(parts[1].split()[0])}
+                except:
+                    pass
+            elif platform.system() == "Darwin":
+                try:
+                    import subprocess
+                    result = subprocess.run(['system_profiler', 'SPDisplaysDataType'], 
+                                          capture_output=True, text=True)
+                    for line in result.stdout.split('\n'):
+                        if 'Resolution' in line:
+                            parts = line.split(':')[1].strip().split('x')
+                            return {'width': int(parts[0]), 'height': int(parts[1].split()[0])}
+                except:
+                    pass
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def beep(frequency=1000, duration=200):
+        """发出蜂鸣声"""
+        try:
+            if platform.system() == "Windows":
+                import winsound
+                winsound.Beep(frequency, duration)
+            else:
+                # Linux/macOS 使用 \a
+                print('\a', end='', flush=True)
+        except:
+            pass
+    
+    @staticmethod
+    def get_mac_address():
+        """获取MAC地址"""
+        try:
+            import uuid
+            mac = uuid.getnode()
+            return ':'.join(('%012x' % mac)[i:i+2] for i in range(0, 12, 2))
+        except:
+            return None
+    
+    @staticmethod
+    def get_hardware_id():
+        """获取硬件唯一ID"""
+        try:
+            import uuid
+            return str(uuid.getnode())
+        except:
+            return None
+
+# ==================== 25. 串口通信模块 (新增) ====================
+
+class SerialPort:
+    """串口通信模块"""
+    
+    def __init__(self, port=None, baudrate=9600, timeout=1):
+        self.port = port
+        self.baudrate = baudrate
+        self.timeout = timeout
+        self._serial = None
+        
+    def open(self, port=None, baudrate=None, timeout=None):
+        """打开串口"""
+        try:
+            import serial
+            port = port or self.port
+            baudrate = baudrate or self.baudrate
+            timeout = timeout or self.timeout
+            
+            if not port:
+                raise ValueError("请指定串口号")
+            
+            self._serial = serial.Serial(port, baudrate, timeout=timeout)
+            return True
+        except ImportError:
+            return False
+        except Exception as e:
+            return False
+    
+    def close(self):
+        """关闭串口"""
+        if self._serial and self._serial.is_open:
+            self._serial.close()
+            return True
+        return False
+    
+    def write(self, data):
+        """写入数据"""
+        if not self._serial or not self._serial.is_open:
+            return False
+        try:
+            if isinstance(data, str):
+                data = data.encode()
+            return self._serial.write(data)
+        except:
+            return 0
+    
+    def read(self, size=1):
+        """读取数据"""
+        if not self._serial or not self._serial.is_open:
+            return b''
+        try:
+            return self._serial.read(size)
+        except:
+            return b''
+    
+    def readline(self):
+        """读取一行"""
+        if not self._serial or not self._serial.is_open:
+            return b''
+        try:
+            return self._serial.readline()
+        except:
+            return b''
+    
+    def read_all(self):
+        """读取所有可用数据"""
+        if not self._serial or not self._serial.is_open:
+            return b''
+        try:
+            return self._serial.read_all()
+        except:
+            return b''
+    
+    def is_open(self):
+        """检查串口是否打开"""
+        return self._serial is not None and self._serial.is_open
+    
+    def get_ports(self):
+        """获取可用串口列表"""
+        try:
+            import serial.tools.list_ports
+            return [port.device for port in serial.tools.list_ports.comports()]
+        except:
+            return []
+    
+    def __enter__(self):
+        self.open()
+        return self
+    
+    def __exit__(self, *args):
+        self.close()
+
+# ==================== 26. 传感器模拟模块 (新增) ====================
+
+class SensorSimulator:
+    """传感器模拟器 - 用于开发和测试"""
+    
+    @staticmethod
+    def temperature(min_val=20, max_val=35, variation=2):
+        """模拟温度传感器"""
+        import random
+        return random.uniform(min_val, max_val) + random.uniform(-variation, variation)
+    
+    @staticmethod
+    def humidity(min_val=30, max_val=80, variation=5):
+        """模拟湿度传感器"""
+        import random
+        return random.uniform(min_val, max_val) + random.uniform(-variation, variation)
+    
+    @staticmethod
+    def pressure(min_val=980, max_val=1030, variation=5):
+        """模拟气压传感器 (hPa)"""
+        import random
+        return random.uniform(min_val, max_val) + random.uniform(-variation, variation)
+    
+    @staticmethod
+    def light(min_val=0, max_val=1000, variation=50):
+        """模拟光照传感器 (lux)"""
+        import random
+        return max(0, random.uniform(min_val, max_val) + random.uniform(-variation, variation))
+    
+    @staticmethod
+    def distance(min_val=0.1, max_val=5.0, variation=0.1):
+        """模拟距离传感器 (米)"""
+        import random
+        return max(0, random.uniform(min_val, max_val) + random.uniform(-variation, variation))
+    
+    @staticmethod
+    def accelerometer(g=9.8):
+        """模拟加速度计 (m/s²)"""
+        import random
+        return {
+            'x': random.uniform(-g, g),
+            'y': random.uniform(-g, g),
+            'z': random.uniform(-g, g)
+        }
+    
+    @staticmethod
+    def gyroscope(deg=180):
+        """模拟陀螺仪 (°/s)"""
+        import random
+        return {
+            'x': random.uniform(-deg, deg),
+            'y': random.uniform(-deg, deg),
+            'z': random.uniform(-deg, deg)
+        }
+    
+    @staticmethod
+    def gps(lat_min=-90, lat_max=90, lon_min=-180, lon_max=180):
+        """模拟GPS坐标"""
+        import random
+        return {
+            'latitude': random.uniform(lat_min, lat_max),
+            'longitude': random.uniform(lon_min, lon_max)
+        }
+    
+    @staticmethod
+    def analog_input(min_val=0, max_val=1023):
+        """模拟模拟输入 (0-1023)"""
+        import random
+        return random.randint(min_val, max_val)
+    
+    @staticmethod
+    def digital_input():
+        """模拟数字输入 (0或1)"""
+        import random
+        return random.randint(0, 1)
+
+# ==================== 27. 音频模块 (新增) ====================
+
+class Audio:
+    """音频控制模块"""
+    
+    @staticmethod
+    def play_sound(frequency=440, duration=0.5):
+        """播放声音"""
+        try:
+            if platform.system() == "Windows":
+                import winsound
+                winsound.Beep(frequency, int(duration * 1000))
+            else:
+                # 使用系统蜂鸣
+                print('\a', end='', flush=True)
+                time.sleep(duration)
+        except:
+            pass
+    
+    @staticmethod
+    def play_wav(filepath):
+        """播放WAV文件"""
+        try:
+            if platform.system() == "Windows":
+                import winsound
+                winsound.PlaySound(filepath, winsound.SND_FILENAME)
+                return True
+            else:
+                import subprocess
+                subprocess.run(['aplay', filepath] if platform.system() == "Linux" else ['afplay', filepath],
+                             capture_output=True)
+                return True
+        except:
+            return False
+    
+    @staticmethod
+    def get_audio_devices():
+        """获取音频设备列表"""
         devices = []
-        board = system_info.get("board", "pc")
-        features = system_info.get("features", {})
-        
-        # GPIO
-        if features.get("gpio", False):
-            devices.append(_DeviceInfo(
-                "gpio", "GPIO 控制器", IOPortType.GPIO,
-                "gpio", "RPi.GPIO", True, aliases=["gpio0", "bcm"]
-            ))
-        
-        # I2C
-        if features.get("i2c", False):
-            devices.append(_DeviceInfo(
-                "i2c", "I2C 总线", IOPortType.I2C,
-                "i2c", "smbus2", True, aliases=["i2c0", "i2c1", "smbus"]
-            ))
-        
-        # SPI
-        if features.get("spi", False):
-            devices.append(_DeviceInfo(
-                "spi", "SPI 总线", IOPortType.SPI,
-                "spi", "spidev", True, aliases=["spi0", "spi1"]
-            ))
-        
-        # UART
-        if features.get("uart", False):
-            devices.append(_DeviceInfo(
-                "uart", "UART 串口", IOPortType.UART,
-                "uart", "serial", True, aliases=["ttyS0", "ttyAMA0"]
-            ))
-        
-        # 摄像头
-        if features.get("camera", False):
-            devices.append(_DeviceInfo(
-                "csi_camera", "CSI 摄像头", IOPortType.CSI,
-                "csi", "picamera", True, aliases=["csi0", "cam", "camera"]
-            ))
-        
-        # USB 设备扫描
-        if features.get("usb", False):
-            try:
-                import usb.core
-                import usb.util
-                for dev in usb.core.find(find_all=True):
-                    try:
-                        product = usb.util.get_string(dev, dev.iProduct) if dev.iProduct else "USB 设备"
-                        devices.append(_DeviceInfo(
-                            f"usb_{dev.idVendor:04x}_{dev.idProduct:04x}",
-                            product, IOPortType.USB,
-                            f"usb{dev.address}", "pyusb", True,
-                            aliases=[f"usb{dev.address}"],
-                            metadata={"vid": dev.idVendor, "pid": dev.idProduct}
-                        ))
-                    except:
-                        pass
-            except:
-                pass
-        
-        # OpenCV 摄像头
-        if features.get("opencv", False):
-            try:
-                cap = cv2.VideoCapture(0)
-                if cap.isOpened():
-                    devices.append(_DeviceInfo(
-                        "usb_camera", "USB 摄像头 (OpenCV)", IOPortType.USB_CAM,
-                        "usb_cam", "opencv", True, aliases=["cam0", "webcam"]
-                    ))
-                    cap.release()
-            except:
-                pass
-        
-        # PCIe 设备
         try:
-            result = subprocess.run(['lspci'], capture_output=True, text=True)
-            for line in result.stdout.split('\n'):
-                if 'NVIDIA' in line or 'AMD' in line:
-                    if 'VGA' in line or '3D' in line:
-                        devices.append(_DeviceInfo(
-                            f"pcie_{line.split()[0]}", f"GPU: {line.strip()}",
-                            IOPortType.PCIE, f"pcie_{line.split()[0]}",
-                            "pcie", True, aliases=["gpu", "pcie"]
-                        ))
-                elif 'AI' in line or 'accelerator' in line.lower() or 'NPU' in line:
-                    devices.append(_DeviceInfo(
-                        f"pcie_ai_{line.split()[0]}", f"AI 加速: {line.strip()}",
-                        IOPortType.AI_PCIE, f"pcie_ai_{line.split()[0]}",
-                        "pcie_ai", True, aliases=["ai", "ai_pcie"]
-                    ))
+            if platform.system() == "Windows":
+                try:
+                    import wave
+                    import pyaudio
+                    p = pyaudio.PyAudio()
+                    for i in range(p.get_device_count()):
+                        info = p.get_device_info_by_index(i)
+                        devices.append({
+                            'index': i,
+                            'name': info['name'],
+                            'channels': info['maxInputChannels'],
+                            'sample_rate': int(info['defaultSampleRate'])
+                        })
+                    p.terminate()
+                except:
+                    pass
+            else:
+                import subprocess
+                result = subprocess.run(['arecord', '-L'] if platform.system() == "Linux" else ['system_profiler', 'SPAudioDataType'],
+                                      capture_output=True, text=True)
+                for line in result.stdout.split('\n'):
+                    if ':' in line and not line.startswith(' '):
+                        devices.append({'name': line.strip()})
         except:
             pass
-        
-        # 开发板专用
-        board_map = {
-            "jetson": ("Jetson GPIO", IOPortType.JETSON_GPIO, "Jetson.GPIO", "jetson_gpio", ["jetson"]),
-            "orange_pi": ("香橙派 GPIO", IOPortType.ORANGE_PI_GPIO, "OPi.GPIO", "orange_gpio", ["orange", "orange_pi"]),
-            "rockchip": ("Rockchip GPIO", IOPortType.ROCKCHIP_GPIO, "rockchip_gpio", "rockchip_gpio", ["rockchip", "rk"]),
-            "allwinner": ("全志 GPIO", IOPortType.ALLWINNER_GPIO, "allwinner_gpio", "allwinner_gpio", ["allwinner", "aw"]),
-            "banana_pi": ("Banana Pi GPIO", IOPortType.BANANA_PI_GPIO, "banana_gpio", "banana_gpio", ["banana", "banana_pi"]),
-        }
-        if board in board_map:
-            name, ptype, driver, port, aliases = board_map[board]
-            devices.append(_DeviceInfo(
-                port, name, ptype, port, driver, True, aliases=aliases
-            ))
-        
         return devices
 
-class IOLib:
-    """硬件控制库 - IO 子模块"""
-    
-    def __init__(self):
-        self.system_info = _SystemDetector.detect()
-        self._devices = _DeviceScanner.scan(self.system_info)
-        self.available_devices = [d for d in self._devices if d.available]
-        
-        # 快捷访问
-        self.gpio = self._get_device("gpio")
-        self.i2c = self._get_device("i2c")
-        self.spi = self._get_device("spi")
-        self.uart = self._get_device("uart")
-        self.camera = self._get_device("csi_camera") or self._get_device("usb_camera")
-        self.gpu = self._get_device("gpu")
-        self.ai = self._get_device("ai")
-    
-    def _get_device(self, name):
-        for d in self.available_devices:
-            if d.id == name or name in d.aliases:
-                return d
-        return None
-    
-    def bind(self, port_spec):
-        """绑定设备 - 支持 su 强制绑定"""
-        return _PortBinder.bind(port_spec, self.available_devices)
-    
-    def get(self, port_spec):
-        """获取设备信息"""
-        for d in self.available_devices:
-            if d.port_spec == port_spec or port_spec in d.aliases:
-                return d
-        return None
-    
-    def list(self):
-        """列出所有可用设备"""
-        return self.available_devices.copy()
-    
-    def summary(self):
-        """系统摘要"""
-        return {
-            "system": self.system_info,
-            "device_count": len(self.available_devices),
-            "devices": [{"name": d.name, "type": d.port_type, "port": d.port_spec} 
-                       for d in self.available_devices]
-        }
+# ==================== 28. GPIO 模拟模块 (新增) ====================
 
-# ==================== StdLib 统一实例 ====================
+class GPIO:
+    """GPIO 控制模拟模块 (支持树莓派和模拟模式)"""
+    
+    MODES = {
+        'BOARD': 'BOARD',
+        'BCM': 'BCM'
+    }
+    
+    DIRECTIONS = {
+        'IN': 'IN',
+        'OUT': 'OUT'
+    }
+    
+    PULL = {
+        'UP': 'UP',
+        'DOWN': 'DOWN',
+        'OFF': 'OFF'
+    }
+    
+    def __init__(self, mode='BCM', simulation=True):
+        self.mode = mode
+        self.simulation = simulation
+        self._pins = {}
+        self._used = set()
+        
+    def setmode(self, mode):
+        """设置引脚编号模式"""
+        if mode in self.MODES.values():
+            self.mode = mode
+    
+    def setup(self, pin, direction, pull=None):
+        """设置引脚方向"""
+        if pin in self._used and self._pins.get(pin, {}).get('direction') != direction:
+            pass  # 允许重新配置
+        self._used.add(pin)
+        self._pins[pin] = {
+            'direction': direction,
+            'pull': pull,
+            'value': 0 if direction == self.DIRECTIONS['OUT'] else None
+        }
+    
+    def output(self, pin, value):
+        """输出值"""
+        if pin in self._pins and self._pins[pin]['direction'] == self.DIRECTIONS['OUT']:
+            self._pins[pin]['value'] = int(bool(value))
+            return True
+        return False
+    
+    def input(self, pin):
+        """读取输入值"""
+        if pin in self._pins and self._pins[pin]['direction'] == self.DIRECTIONS['IN']:
+            if self.simulation:
+                import random
+                return random.randint(0, 1)
+            return self._pins[pin].get('value', 0)
+        return 0
+    
+    def set_simulation_value(self, pin, value):
+        """设置模拟值 (仅模拟模式)"""
+        if self.simulation and pin in self._pins:
+            self._pins[pin]['value'] = int(bool(value))
+            return True
+        return False
+    
+    def cleanup(self, pin=None):
+        """清理引脚"""
+        if pin is not None:
+            if pin in self._pins:
+                del self._pins[pin]
+                self._used.discard(pin)
+        else:
+            self._pins.clear()
+            self._used.clear()
+    
+    def get_pin_state(self, pin):
+        """获取引脚状态"""
+        return self._pins.get(pin)
+
+# ==================== 29. StdLib 统一实例 ====================
 
 class StdLib:
     def __init__(self):
@@ -3171,7 +4323,7 @@ class StdLib:
         self.utils = Utils()
         self.sys = SystemInfo()
         
-        # 图论算法
+        # 图论算法模块
         self.graph = GraphAlgo()
         
         # 新增功能
@@ -3194,8 +4346,35 @@ class StdLib:
         self.memory_pool = MemoryPool
         self.bitfield = BitField
         
-        # ========== IO 硬件控制 ==========
-        self.io_lib = IOLib()
+        # 全新功能
+        self.task = Task
+        self.trie = Trie
+        self.bloom_filter = BloomFilter
+        self.rate_limiter = RateLimiter
+        self.diff = Diff
+        self.levenshtein = Levenshtein
+        self.human = HumanReadable
+        self.semver = SemanticVersion
+        self.observable_list = ObservableList
+        self.event = Event
+        self.debounce = debounce
+        self.throttle = throttle
+        self.timeout = Timeout
+        self.lock = Lock
+        self.atomic = atomic
+        self.singleton = singleton
+        self.lazy_cache = LazyCache
+        self.gzip_compress = gzip_compress
+        self.gzip_decompress = gzip_decompress
+        self.zlib_compress = zlib_compress
+        self.zlib_decompress = zlib_decompress
+        
+        # ========== 硬件控制模块 (新增) ==========
+        self.hardware = Hardware()
+        self.serial = SerialPort
+        self.sensor = SensorSimulator()
+        self.audio = Audio()
+        self.gpio = GPIO
 
 # 创建全局实例
 std = StdLib()
