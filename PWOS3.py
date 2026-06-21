@@ -458,7 +458,32 @@ class ScriptEngine:
     def run_main(self, bid, developer_mode=False):
         for bid_name, code_lines in self.menu_items:
             if bid_name == bid:
-                full_code = '\n'.join(code_lines)
+                # ===== 1. 先构建所有函数的定义 =====
+                func_definitions = []
+                for func_name, func_lines in self.functions.items():
+                    # 生成函数定义头
+                    func_definitions.append(f"def {func_name}():")
+                    # 添加函数体（自动缩进）
+                    for line in func_lines:
+                        if line.strip():  # 非空行
+                            # 如果已经有缩进就保留，否则加4个空格
+                            if line.startswith('    ') or line.startswith('\t'):
+                                func_definitions.append(line.rstrip())
+                            else:
+                                func_definitions.append(f"    {line.rstrip()}")
+                        else:
+                            func_definitions.append("")  # 空行
+                    func_definitions.append("")  # 函数间空行
+                
+                # ===== 2. 组装完整脚本 =====
+                script_parts = []
+                if func_definitions:
+                    script_parts.extend(func_definitions)
+                    script_parts.append("")  # 函数和main之间空行
+                script_parts.extend(code_lines)
+                full_code = '\n'.join(script_parts)
+                
+                # ===== 3. 执行 =====
                 env = {
                     **self.vars, 
                     **self.builtins,
@@ -473,6 +498,8 @@ class ScriptEngine:
                     return "SCRIPT_EXECUTED"
                 except Exception as e:
                     safe_print(f"脚本错误: {e}")
+                    import traceback
+                    traceback.print_exc()
                     return "SCRIPT_ERROR"
         return "SCRIPT_NOT_FOUND"
 
@@ -6375,7 +6402,32 @@ class ScriptEngine:
     def run_main(self, bid, developer_mode=False):
         for bid_name, code_lines in self.menu_items:
             if bid_name == bid:
-                full_code = '\n'.join(code_lines)
+                # ===== 1. 先构建所有函数的定义 =====
+                func_definitions = []
+                for func_name, func_lines in self.functions.items():
+                    # 生成函数定义头
+                    func_definitions.append(f"def {func_name}():")
+                    # 添加函数体（自动缩进）
+                    for line in func_lines:
+                        if line.strip():  # 非空行
+                            # 如果已经有缩进就保留，否则加4个空格
+                            if line.startswith('    ') or line.startswith('\t'):
+                                func_definitions.append(line.rstrip())
+                            else:
+                                func_definitions.append(f"    {line.rstrip()}")
+                        else:
+                            func_definitions.append("")  # 空行
+                    func_definitions.append("")  # 函数间空行
+                
+                # ===== 2. 组装完整脚本 =====
+                script_parts = []
+                if func_definitions:
+                    script_parts.extend(func_definitions)
+                    script_parts.append("")  # 函数和main之间空行
+                script_parts.extend(code_lines)
+                full_code = '\n'.join(script_parts)
+                
+                # ===== 3. 执行 =====
                 env = {
                     **self.vars, 
                     **self.builtins,
@@ -6390,6 +6442,8 @@ class ScriptEngine:
                     return "SCRIPT_EXECUTED"
                 except Exception as e:
                     safe_print(f"脚本错误: {e}")
+                    import traceback
+                    traceback.print_exc()
                     return "SCRIPT_ERROR"
         return "SCRIPT_NOT_FOUND"
 

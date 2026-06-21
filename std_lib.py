@@ -61,6 +61,179 @@ try:
 except ImportError:
     yaml = None
 
+
+# ==================== 静默自动依赖安装器 ====================
+"""
+完全静默的自动依赖安装器
+后台自动检测并安装缺失的库，用户完全无感知
+"""
+import subprocess
+import sys
+import importlib
+import os
+import threading
+
+class SilentDependencyInstaller:
+    """静默自动依赖安装器 - 全后台运行，用户无感知"""
+    
+    # 核心依赖（这些库不装，功能会严重受损）
+    CORE_DEPENDENCIES = {
+        "cryptography": "cryptography",
+        "psutil": "psutil",
+        "requests": "requests",
+    }
+    
+    # 可选依赖（装不装不影响核心功能）
+    OPTIONAL_DEPENDENCIES = {
+        "yaml": "pyyaml",
+        "serial": "pyserial",
+        "RPi": "RPi.GPIO",
+        "smbus2": "smbus2",
+        "spidev": "spidev",
+        "cv2": "opencv-python",
+        "torch": "torch",
+        "wmi": "wmi",
+        "dns": "dnspython",
+        "llama_cpp": "llama-cpp-python"
+    }
+    
+    _installed = set()
+    _failed = set()
+    _lock = threading.Lock()
+    
+    @classmethod
+    def _is_installed(cls, module_name: str) -> bool:
+        """检查模块是否已安装"""
+        try:
+            importlib.import_module(module_name)
+            return True
+        except ImportError:
+            return False
+    
+    @classmethod
+    def _install_package(cls, package_name: str) -> bool:
+        """后台静默安装单个包（无输出）"""
+        try:
+            # 静默安装，所有输出重定向到 null
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", package_name, "--quiet", "--no-input"],
+                capture_output=True,
+                timeout=180,
+                check=False
+            )
+            # 验证是否真的装上了
+            return True
+        except:
+            return False
+    
+    @classmethod
+    def _install_in_background(cls, package_name: str, module_name: str):
+        """后台线程执行安装"""
+        with cls._lock:
+            # 如果已经成功或失败过，跳过
+            if package_name in cls._installed or package_name in cls._failed:
+                return
+        
+        # 先检查是否已经安装
+        if cls._is_installed(module_name):
+            with cls._lock:
+                cls._installed.add(package_name)
+            return
+        
+        # 尝试安装
+        success = cls._install_package(package_name)
+        
+        with cls._lock:
+            if success and cls._is_installed(module_name):
+                cls._installed.add(package_name)
+            else:
+                cls._failed.add(package_name)
+    
+    @classmethod
+    def ensure_core(cls):
+        """确保核心依赖已安装（同步，但静默）"""
+        for module_name, package_name in cls.CORE_DEPENDENCIES.items():
+            if not cls._is_installed(module_name):
+                # 尝试安装
+                cls._install_package(package_name)
+    
+    @classmethod
+    def ensure_all_background(cls):
+        """后台异步安装所有依赖"""
+        # 先确保核心依赖（同步安装）
+        cls.ensure_core()
+        
+        # 后台线程安装可选依赖
+        def install_optional():
+            for module_name, package_name in cls.OPTIONAL_DEPENDENCIES.items():
+                # 跳过已安装的
+                if cls._is_installed(module_name):
+                    continue
+                # 跳过已失败的（避免反复尝试）
+                if package_name in cls._failed:
+                    continue
+                # 尝试安装
+                cls._install_in_background(package_name, module_name)
+        
+        thread = threading.Thread(target=install_optional, daemon=True)
+        thread.start()
+    
+    @classmethod
+    def get_status(cls) -> dict:
+        """获取安装状态（调试用）"""
+        return {
+            "installed": list(cls._installed),
+            "failed": list(cls._failed)
+        }
+
+
+# ==================== 执行静默自动安装 ====================
+
+# 立即在后台启动静默安装
+def _init_dependencies():
+    """初始化依赖 - 完全静默，不输出任何信息"""
+    try:
+        # 捕获所有输出，彻底静默
+        with open(os.devnull, 'w') as devnull:
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = devnull
+            sys.stderr = devnull
+            
+            try:
+                # 同步安装核心依赖（必须）
+                SilentDependencyInstaller.ensure_core()
+                # 后台异步安装可选依赖
+                SilentDependencyInstaller.ensure_all_background()
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+    except:
+        pass  # 静默失败，不影响主程序
+
+# 启动依赖安装（非阻塞）
+_init_dependencies()
+
+# 提供状态查询（供调试使用）
+def _get_dep_status():
+    """获取依赖安装状态（内部使用）"""
+    return SilentDependencyInstaller.get_status()
+
+# 创建便捷变量供后续代码使用
+_HAS_CRYPTO = importlib.util.find_spec("cryptography") is not None
+_HAS_PSUTIL = importlib.util.find_spec("psutil") is not None
+_HAS_REQUESTS = importlib.util.find_spec("requests") is not None
+_HAS_YAML = importlib.util.find_spec("yaml") is not None
+_HAS_SERIAL = importlib.util.find_spec("serial") is not None
+_HAS_RPI = importlib.util.find_spec("RPi") is not None
+_HAS_SMBUS = importlib.util.find_spec("smbus2") is not None
+_HAS_SPIDEV = importlib.util.find_spec("spidev") is not None
+_HAS_CV2 = importlib.util.find_spec("cv2") is not None
+_HAS_TORCH = importlib.util.find_spec("torch") is not None
+_HAS_WMI = importlib.util.find_spec("wmi") is not None
+_HAS_DNS = importlib.util.find_spec("dns") is not None
+_HAS_LLAMA = importlib.util.find_spec("llama_cpp") is not None
+
 # ==================== 1. 基础类型增强 ====================
 
 class Ptr:
